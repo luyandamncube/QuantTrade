@@ -12,6 +12,7 @@ Learning how to apply quantiative methods & thinking to real world trading scena
 
 ## Repo directory
 
+```
 QuantTrade
 │
 ├── notebooks/                 # All Jupyter notebooks for research
@@ -39,3 +40,4 @@ QuantTrade
 ├── requirements.txt           # Dependencies for running everything locally
 ├── README.md                  # Overview of the repo and usage instructions
 └── .gitignore                 # Ignore data dumps, logs, cache
+```
