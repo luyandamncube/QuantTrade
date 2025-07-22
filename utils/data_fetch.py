@@ -1,4 +1,4 @@
-import os
+import sys, os
 import time
 import pandas as pd
 from tiingo import TiingoClient
@@ -8,8 +8,10 @@ from datetime import datetime
 # --- Tiingo API Configuration ---
 load_dotenv()
 
-# Resolve project root (two levels up from this file)
+# Resolve project root automatically (2 levels up from this file)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
 # Get .env values
 TIINGO_API_KEY = os.getenv("TIINGO_API_KEY")
@@ -30,11 +32,11 @@ def get_price_data(symbols, start, end):
     Fetch and cache adjusted close prices for symbols via Tiingo.
     Cache directory is defined in .env but resolved relative to project root.
     """
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR_ENV, exist_ok=True)
     all_data = pd.DataFrame()
 
     for sym in symbols:
-        cache_file = os.path.join(CACHE_DIR, f"{sym}.csv")
+        cache_file = os.path.join(CACHE_DIR_ENV, f"{sym}.csv")
 
         if os.path.exists(cache_file):
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
