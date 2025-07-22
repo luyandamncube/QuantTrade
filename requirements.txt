@@ -5,3 +5,4 @@ statsmodels
 tiingo
 scikit-learn
 tensorflow
+dotenv
