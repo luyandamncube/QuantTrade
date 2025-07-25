@@ -5,25 +5,25 @@ from tiingo import TiingoClient
 from dotenv import load_dotenv
 from datetime import datetime
 
-# --- Tiingo API Configuration ---
-load_dotenv()
-
-# Resolve project root automatically (2 levels up from this file)
+# --- Ensure Project Root is Always on sys.path ---
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# Get .env values
+# --- Load .env from Project Root ---
+env_path = os.path.join(PROJECT_ROOT, ".env")
+load_dotenv(dotenv_path=env_path)  # Explicitly load from root
+
+# --- Get Variables ---
 TIINGO_API_KEY = os.getenv("TIINGO_API_KEY")
-CACHE_DIR_ENV = os.getenv("CACHE_DIR", "data/raw/tiingo")
+CACHE_DIR_ENV = os.getenv("CACHE_DIR", "data/raw/tiingo")  # fallback if not in .env
+CACHE_DIR = os.path.join(PROJECT_ROOT, CACHE_DIR_ENV)      # make absolute
 
 if not TIINGO_API_KEY:
-    raise ValueError("Missing TIINGO_API_KEY in .env file or environment variables.")
- 
-TIINGO_CONFIG = {
-    'session': True,
-    'api_key': TIINGO_API_KEY
-}
+    raise ValueError("TIINGO_API_KEY not set in .env or environment.")
+
+# --- Configure Tiingo Client ---
+TIINGO_CONFIG = {'session': True, 'api_key': TIINGO_API_KEY}
 client = TiingoClient(TIINGO_CONFIG)
 
 
