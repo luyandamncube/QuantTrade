@@ -14,6 +14,7 @@ Learning how to apply quantiative methods & thinking to real world trading scena
  ```
   brew install dolt
   dolt clone post-no-preference/options
+  cd ./options 
   dolt dump -r csv
   ```
 - The above script on mac will create a csv dump of options data (`option_chain.csv`)
