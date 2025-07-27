@@ -112,3 +112,18 @@ CREATE TABLE options_quotes_tick (
     vega NUMERIC,
     UNIQUE(contract_id, timestamp)
 );
+
+-- /////////////////////////////////////// BACKTESTING ///////////////////////////////////////
+CREATE TABLE backtest_results (
+    id SERIAL PRIMARY KEY,
+    strategy_name VARCHAR(100),
+    start_date DATE,
+    end_date DATE,
+    cagr NUMERIC,
+    max_drawdown NUMERIC,
+    sharpe NUMERIC,
+    sortino NUMERIC,
+    total_trades INT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

@@ -61,16 +61,14 @@ def get_available_symbols(active_only=True, force_refresh=False):
     print("Fetching all stock/ETF tickers from Tiingo via client...")
     try:
         tickers = client.list_stock_tickers()
-        # print(tickers)clear; pytho    
         df = pd.DataFrame(tickers)
-        print(df.head())
         # Filter for active symbols
         # if active_only and "endDate" in df.columns:
         #     df = df[df["endDate"].isna()]
 
         # Cache the result
-        os.makedirs(os.path.dirname('data/raw/tiingo/symbols.csv'), exist_ok=True)
-        df.to_csv('data/raw/tiingo/symbols.csv', index=False)
+        os.makedirs(os.path.dirname(SYMBOLS_DIR), exist_ok=True)
+        df.to_csv(SYMBOLS_DIR, index=False)
         return df
     except Exception as e:
         print(f"Error fetching symbols via TiingoClient: {e}")
