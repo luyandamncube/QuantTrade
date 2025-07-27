@@ -2,4 +2,7 @@
 .env
 utils/__pycache__/
 QuantTrade.egg-info/
-data/* 
+data/raw/tiingo/*
+data/raw/dolt/earnings/*
+data/raw/dolt/options/*
+data/raw/dolt/rates/*
