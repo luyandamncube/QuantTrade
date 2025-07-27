@@ -67,7 +67,7 @@ us_treasury.csv
 ## 3. Convert CSVs to Parquet
 
 ```bash
-python utils/csv_to_parquet.py --src data/raw/dolt/options --dest data/processed/options
-python utils/csv_to_parquet.py --src data/raw/dolt/earnings --dest data/processed/earnings
-python utils/csv_to_parquet.py --src data/raw/dolt/rates --dest data/processed/rates
+python utils/csv_to_parquet.py --src data/raw/dolt/earnings/doltdump --dest data/processed/earnings
+python utils/csv_to_parquet.py --src data/raw/dolt/options/doltdump --dest data/processed/options
+python utils/csv_to_parquet.py --src data/raw/dolt/rates/doltdump --dest data/processed/rates
 ```
