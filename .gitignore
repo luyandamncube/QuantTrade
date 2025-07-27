@@ -11,3 +11,7 @@ data/raw/tiingo/symbols.csv
 data/raw/dolt/earnings/*
 data/raw/dolt/options/*
 data/raw/dolt/rates/*
+
+data/processed/dolt/earnings/*
+data/processed/dolt/options/*
+data/processed/dolt/rates/*

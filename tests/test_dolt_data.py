@@ -3,7 +3,7 @@ import os
 
 # Root directory (adjust if needed)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "dolt")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "processed", "dolt")
 
 # List of Parquet files to preview
 PARQUET_FILES = [
