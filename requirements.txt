@@ -6,3 +6,4 @@ tiingo
 scikit-learn
 tensorflow
 dotenv
+pyarrow
