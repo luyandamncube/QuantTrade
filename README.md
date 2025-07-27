@@ -8,7 +8,15 @@ Learning how to apply quantiative methods & thinking to real world trading scena
 4. Validate - Calculate performance
 
 ## Data source(s)
-- [Tiingo](https://www.tiingo.com/products/stock-api) provides a free tier for pulling financial data 
+- [Tiingo](https://www.tiingo.com/products/stock-api) provides a free tier for pulling financial data (symbols, day resolution)
+- [Dolthub](https://www.dolthub.com/repositories/post-no-preference/options/data/master) has a larg ~6.GB public options database
+
+ ```
+  brew install dolt
+  dolt clone post-no-preference/options
+  dolt dump -r csv
+  ```
+- The above script on mac will create a csv dump of options data (`option_chain.csv`)
 
 ## Repo directory
 
