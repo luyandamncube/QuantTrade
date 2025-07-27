@@ -1,1 +1,5 @@
 .DS_Store
+.env
+utils/__pycache__/
+QuantTrade.egg-info/
+data/* 
