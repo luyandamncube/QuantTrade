@@ -26,11 +26,19 @@ QuantTrade
 │
 ├── data/                      # Raw or processed market data
 │   ├── raw/                   # Unprocessed data (downloads from Yahoo, etc.)
+│   │   ├── tiingo/price/          # Daily adjClose
+│   │   ├── tiingo/ohlcv/          # Full OHLCV
+│   │   ├── polygon/options/       # Options chains (CSV snapshots)
+│   │   ├── price/minute/          # Parquet (minute bars)
+│   │   └── options/tick/          # Parquet (tick chains if needed)
 │   └── processed/             # Cleaned time series (used for backtests)
 │
 ├── results/                   # Output from backtests
 │   ├── summaries/             # CSV/JSON summary stats for each run
 │   └── charts/                # Plots (portfolio growth curves, comparisons)
+│
+├── sql/                        # SQL migrations
+│   └── SQL_table_setup.sql
 │
 ├── utils/                     # Helper modules (shared functions)
 │   ├── data_fetch.py          # Functions to get data (Yahoo, QC, etc.)
