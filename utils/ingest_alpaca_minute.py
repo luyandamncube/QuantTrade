@@ -72,13 +72,16 @@ def ingest_symbol(symbol: str):
         combined.to_csv(raw_csv_path)
         print(f"Saved to {raw_csv_path}")
 
-        # Save to DuckDB
+        combined_reset = combined.reset_index()  # move timestamp from index to column
+
         with duckdb.connect(PROCESSED_DB) as con:
-            con.execute(f"CREATE TABLE IF NOT EXISTS minute_{symbol} AS SELECT * FROM combined LIMIT 0")
-            con.execute(f"INSERT INTO minute_{symbol} SELECT * FROM combined")
+            con.register("temp_df", combined_reset)
+
+            con.execute(f"CREATE TABLE IF NOT EXISTS minute_{symbol} AS SELECT * FROM temp_df LIMIT 0")
+            con.execute(f"INSERT INTO minute_{symbol} SELECT * FROM temp_df")
+
             print(f"Written to DuckDB: table minute_{symbol}")
-    else:
-        print("No new data")
+
 
 if __name__ == "__main__":
     import argparse

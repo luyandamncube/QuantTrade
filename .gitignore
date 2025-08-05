@@ -18,6 +18,8 @@ data/processed/dolt/earnings/*
 data/processed/dolt/options/*
 data/processed/dolt/rates/*
 
+data/processed/alpaca/*
+
 data/raw/alpaca/*
 data/raw/alpaca/minute/*
 
