@@ -8,3 +8,6 @@ tensorflow
 dotenv
 pyarrow
 duckdb
+alpaca-trade-api
+alpaca-py>=0.10.0
+

@@ -3,6 +3,8 @@
 utils/__pycache__/
 QuantTrade.egg-info/
 
+notebooks/etf_dca/.ipynb_checkpoints/*
+
 data/raw/tiingo/ohlcv/*
 data/raw/tiingo/options/*
 data/raw/tiingo/price/*
@@ -15,3 +17,9 @@ data/raw/dolt/rates/*
 data/processed/dolt/earnings/*
 data/processed/dolt/options/*
 data/processed/dolt/rates/*
+
+data/raw/alpaca/*
+data/raw/alpaca/minute/*
+
+airflow/airflow_venv/*
+airflow/dags/__pycache__/*
