@@ -19,6 +19,16 @@ pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}
 echo "Initializing Airflow database..."
 airflow db init
 
+# ✅ Step 3.5: Disable example DAGs using sed
+echo "Disabling example DAGs in airflow.cfg..."
+CFG_PATH="$AIRFLOW_HOME/airflow.cfg"
+if [ -f "$CFG_PATH" ]; then
+    sed -i.bak 's/^load_examples\s*=.*/load_examples = False/' "$CFG_PATH"
+    echo "✅ airflow.cfg updated: load_examples = False"
+else
+    echo "❌ airflow.cfg not found at $CFG_PATH"
+fi
+
 # ✅ Step 4: Create an admin user
 echo "Creating admin user..."
 airflow users create \
