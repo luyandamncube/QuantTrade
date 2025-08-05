@@ -1,6 +1,6 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # STEP 1: Log DAG python script to airflow
 import sys,os
@@ -30,23 +30,22 @@ if PROJECT_ROOT not in sys.path:
 
 # Try import manually to catch errors
 try:
-    from utils.ingest_alpaca_minute import ingest_symbol
-    print("✅ Import succeeded: ingest_symbol_minute_data")
+    from utils.ingest_alpaca_daily import ingest_daily_symbol
+    print("✅ Import succeeded: ingest_daily_symbol")
 except Exception as e:
     print(f"❌ Import failed: {e}")
     raise
 
-# --- DAG Config ---
 default_args = {
     "owner": "quant",
-    "retries": 1,
-    "retry_delay": timedelta(minutes=5)
+    "start_date": datetime(2023, 1, 1),
+    "retries": 0
 }
 
 dag = DAG(
-    dag_id="ingest_alpaca_minute",
+    dag_id="ingest_alpaca_daily",
     default_args=default_args,
-    description="Ingest 1-min Alpaca data and write to CSV, and DuckDB",
+    description="Ingest daily Alpaca data and write to CSV and DuckDB",
     start_date=datetime(2023, 1, 1),
     schedule_interval=None,  # Manual trigger for now
     catchup=False
@@ -55,10 +54,11 @@ dag = DAG(
 # --- Parameters ---
 SYMBOLS = ["SPY", "QQQ", "SPLV", "SHY"]
 
+# with DAG("ingest_alpaca_daily", default_args=default_args, schedule_interval=None, catchup=False) as dag:
 for symbol in SYMBOLS:
     PythonOperator(
         task_id=f"ingest_{symbol}",
-        python_callable=ingest_symbol,
+        python_callable=ingest_daily_symbol,
         op_args=[symbol],
         dag=dag
     )

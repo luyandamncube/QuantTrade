@@ -11,19 +11,19 @@ from dotenv import load_dotenv
 
 # --- Load environment variables ---
 PROJECT_ROOT = Path.cwd()
-print(f"root (utils)")
 CWD = Path(os.getcwd())
 DUCKDB_PATH = PROJECT_ROOT / "data" / "processed" / "alpaca" / "minute.duckdb"
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-print(f"Project Root: {PROJECT_ROOT}")
-print(f"Working directory: {CWD}")
-print(f"duckdb path: {DUCKDB_PATH}")
+# print(f"Project Root: {PROJECT_ROOT}")
+# print(f"Working directory: {CWD}")
+# print(f"duckdb path: {DUCKDB_PATH}")
 
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "alpaca", "minute")
+# RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "alpaca", "minute")
+RAW_DIR = PROJECT_ROOT / "data" / "raw" / "alpaca" / "price"
 PROCESSED_DB = os.path.join(PROJECT_ROOT, "data", "processed", "alpaca", "minute.duckdb")
 
 client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
