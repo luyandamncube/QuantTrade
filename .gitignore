@@ -3,8 +3,6 @@
 utils/__pycache__/
 QuantTrade.egg-info/
 
-notebooks/etf_dca/.ipynb_checkpoints/*
-
 data/raw/tiingo/ohlcv/*
 data/raw/tiingo/options/*
 data/raw/tiingo/price/*
