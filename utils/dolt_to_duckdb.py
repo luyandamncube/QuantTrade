@@ -153,109 +153,6 @@ def run_cmd(cmd, cwd=None, env=None):
         raise RuntimeError(f"Command failed ({cmd}):\n{proc.stdout}")
     return proc.stdout
 
-# NEW: load CSV -> DuckDB with optional PK upsert
-# def load_csv_to_duckdb(db_path: str, csv_path: str, table: str, pk_cols=None, infer_types=True):
-#     """
-#     Create table if missing, then insert rows from CSV.
-#     If pk_cols is provided, performs an UPSERT (insert only new PKs).
-#     """
-#     db_path = Path(db_path)
-#     db_path.parent.mkdir(parents=True, exist_ok=True)
-#     csv_path = Path(csv_path)
-
-#     with duckdb.connect(str(db_path)) as con:
-#         con.execute("PRAGMA threads=4;")
-#         # Read CSV via DuckDB (fast + type inference)
-#         read_fn = f"read_csv_auto('{csv_path.as_posix()}')" if infer_types else f"read_csv('{csv_path.as_posix()}')"
-
-#         # Stage
-#         con.execute(f"CREATE OR REPLACE TABLE __stg AS SELECT * FROM {read_fn}")
-
-#         # Create target with same schema if missing
-#         con.execute(f"CREATE TABLE IF NOT EXISTS {table} AS SELECT * FROM __stg WHERE 1=0")
-
-#         if pk_cols:
-#             pk_expr = " AND ".join([f"t.{c}=s.{c}" for c in pk_cols])
-#             cols = [r[0] for r in con.execute("PRAGMA table_info('__stg')").fetchall()]
-#             col_list = ", ".join([f"s.{c}" for c in cols])
-
-#             con.execute(f"""
-#                 INSERT INTO {table}
-#                 SELECT {col_list}
-#                 FROM __stg s
-#                 WHERE NOT EXISTS (SELECT 1 FROM {table} t WHERE {pk_expr});
-#             """)
-#             # Optional: add constraint if you want DuckDB to enforce uniqueness
-#             # con.execute(f"ALTER TABLE {table} ADD CONSTRAINT {table}_pk PRIMARY KEY ({', '.join(pk_cols)})")
-#         else:
-#             con.execute(f"INSERT INTO {table} SELECT * FROM __stg")
-#             # De-dupe full rows if you expect repeats
-#             cols = [r[0] for r in con.execute(f"PRAGMA table_info('{table}')").fetchall()]
-#             col_list = ", ".join(cols)
-#             con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT DISTINCT {col_list} FROM {table}")
-
-#         con.execute("DROP TABLE IF EXISTS __stg;")
-
-# utils/dolt_to_duckdb.py
-
-# def load_csv_to_duckdb(db_path: str, csv_path: str, table: str, pk_cols=None, infer_types=True):
-#     """
-#     Create table if missing, then insert rows from CSV.
-#     If pk_cols is provided, performs an UPSERT (insert only new PKs).
-#     """
-#     from pathlib import Path
-#     import duckdb, os
-
-#     def qid(name: str) -> str:
-#         # double-quote and escape embedded quotes
-#         return '"' + str(name).replace('"', '""') + '"'
-
-#     db_path = Path(db_path)
-#     db_path.parent.mkdir(parents=True, exist_ok=True)
-#     csv_path = Path(csv_path)
-
-#     with duckdb.connect(str(db_path)) as con:
-#         con.execute("PRAGMA threads=4;")
-
-#         read_fn = f"read_csv_auto('{csv_path.as_posix()}')" if infer_types else f"read_csv('{csv_path.as_posix()}')"
-
-#         # Stage fresh
-#         con.execute(f"DROP TABLE IF EXISTS __stg;")
-#         con.execute(f"CREATE TABLE __stg AS SELECT * FROM {read_fn}")
-
-#         # Inspect staged columns (helps spot problematic names like '1.0')
-#         cols_info = con.execute("PRAGMA table_info('__stg')").fetchall()
-#         staged_cols = [r[0] for r in cols_info]
-#         print(f"[DuckDB] __stg columns ({len(staged_cols)}): {staged_cols[:12]}{' ...' if len(staged_cols)>12 else ''}")
-
-#         # Create target table if missing with same schema
-#         con.execute(f"CREATE TABLE IF NOT EXISTS {qid(table)} AS SELECT * FROM __stg WHERE 1=0")
-
-#         # Build quoted column list
-#         col_list = ", ".join(qid(c) for c in staged_cols)
-
-#         if pk_cols:
-#             # Build quoted PK predicate
-#             pk_expr = " AND ".join([f"{qid('t')}.{qid(c)}={qid('s')}.{qid(c)}" for c in pk_cols])
-
-#             con.execute(f"""
-#                 INSERT INTO {qid(table)}
-#                 SELECT {", ".join(f'{qid("s")}.{qid(c)}' for c in staged_cols)}
-#                 FROM __stg {qid("s")}
-#                 WHERE NOT EXISTS (
-#                     SELECT 1 FROM {qid(table)} {qid("t")} WHERE {pk_expr}
-#                 );
-#             """)
-#         else:
-#             con.execute(f"INSERT INTO {qid(table)} SELECT {col_list} FROM __stg;")
-#             # Optional dedupe
-#             con.execute(f"""
-#                 CREATE OR REPLACE TABLE {qid(table)} AS
-#                 SELECT DISTINCT {col_list} FROM {qid(table)};
-#             """)
-
-#         con.execute("DROP TABLE IF EXISTS __stg;")
-
 def load_csv_to_duckdb(db_path: str, csv_path: str, table: str, pk_cols=None, infer_types=True):
     """
     Create table if missing, then insert rows from CSV.
@@ -317,3 +214,106 @@ def load_csv_to_duckdb(db_path: str, csv_path: str, table: str, pk_cols=None, in
             """)
 
         con.execute("DROP TABLE IF EXISTS __stg;")
+
+# --- generic Dolt dump for an arbitrary repo name (e.g., "rates") ---
+def dolt_dump_repo(repo_root: str, remote: str, repo_name: str, out_dir: str,
+                   dolt_bin: str = "/usr/local/bin/dolt") -> dict:
+    """
+    Clone (if missing) or 'dolt pull' (if present) for repo_name, then 'dolt dump -r csv -f'.
+    Copies all CSVs from {repo_root}/{repo_name}/doltdump to out_dir and returns a dict:
+      {table_name_without_ext: absolute_csv_path}
+    """
+    repo_root = Path(repo_root)
+    out_dir   = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = {"PATH": f"/usr/local/bin:/usr/bin:/bin:{os.environ.get('PATH','')}"}
+
+    if not (repo_root / repo_name).exists():
+        repo_root.mkdir(parents=True, exist_ok=True)
+        print(run_cmd(f'{dolt_bin} clone {remote} {repo_name}', cwd=repo_root, env=env))
+    else:
+        print(run_cmd(f'{dolt_bin} pull', cwd=repo_root / repo_name, env=env))
+
+    print(run_cmd(f'{dolt_bin} dump -r csv -f', cwd=repo_root / repo_name, env=env))
+
+    src = repo_root / repo_name / "doltdump"
+    if not src.exists():
+        raise FileNotFoundError(f"Dolt dump directory not found: {src}")
+
+    mapping = {}
+    for p in src.glob("*.csv"):
+        table = p.stem  # file name without .csv
+        dest  = out_dir / p.name
+        dest.write_bytes(p.read_bytes())
+        mapping[table] = str(dest)
+
+    if not mapping:
+        raise FileNotFoundError(f"No CSVs found in {src}")
+    return mapping
+
+
+# --- bulk CSV -> DuckDB with per-table PK maps ---
+def load_many_csvs_to_duckdb(db_path: str, table_to_csv: dict, pk_map: dict | None = None):
+    """
+    For each table->csv path, load into DuckDB.
+    pk_map is an optional dict {table: [pk1, pk2, ...]} for upsert.
+    """
+    pk_map = pk_map or {}
+    for table, csv_path in table_to_csv.items():
+        load_csv_to_duckdb(db_path=db_path,
+                           csv_path=csv_path,
+                           table=table,
+                           pk_cols=pk_map.get(table))
+        
+# --- generic Dolt dump for an arbitrary repo name (e.g., "rates") ---
+def dolt_dump_repo(repo_root: str, remote: str, repo_name: str, out_dir: str,
+                   dolt_bin: str = "/usr/local/bin/dolt") -> dict:
+    """
+    Clone (if missing) or 'dolt pull' (if present) for repo_name, then 'dolt dump -r csv -f'.
+    Copies all CSVs from {repo_root}/{repo_name}/doltdump to out_dir and returns a dict:
+      {table_name_without_ext: absolute_csv_path}
+    """
+    from pathlib import Path
+    import os
+
+    repo_root = Path(repo_root)
+    out_dir   = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = {"PATH": f"/usr/local/bin:/usr/bin:/bin:{os.environ.get('PATH','')}"}
+
+    if not (repo_root / repo_name).exists():
+        repo_root.mkdir(parents=True, exist_ok=True)
+        print(run_cmd(f'{dolt_bin} clone {remote} {repo_name}', cwd=repo_root, env=env))
+    else:
+        print(run_cmd(f'{dolt_bin} pull', cwd=repo_root / repo_name, env=env))
+
+    print(run_cmd(f'{dolt_bin} dump -r csv -f', cwd=repo_root / repo_name, env=env))
+
+    src = repo_root / repo_name / "doltdump"
+    if not src.exists():
+        raise FileNotFoundError(f"Dolt dump directory not found: {src}")
+
+    mapping = {}
+    for p in src.glob("*.csv"):
+        table = p.stem  # e.g. 'us_treasury'
+        dest  = out_dir / p.name
+        dest.write_bytes(p.read_bytes())
+        mapping[table] = str(dest)
+
+    if not mapping:
+        raise FileNotFoundError(f"No CSVs found in {src}")
+    return mapping
+
+
+def load_many_csvs_to_duckdb(db_path: str, table_to_csv: dict, pk_map: dict | None = None):
+    """
+    For each table->csv path, load into DuckDB.
+    pk_map is optional {table: [pk1, pk2, ...]} for upsert.
+    """
+    pk_map = pk_map or {}
+    for table, csv_path in table_to_csv.items():
+        load_csv_to_duckdb(db_path=db_path,
+                           csv_path=csv_path,
+                           table=table,
+                           pk_cols=pk_map.get(table))
+
