@@ -44,31 +44,39 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 DOLT_BIN = os.getenv("DOLT_BIN", "/usr/local/bin/dolt")
 DOLT_EXTRA_PATH = os.getenv("DOLT_EXTRA_PATH", "/usr/local/bin/dolt")
 
-DOLT_RATES_REMOTE   = os.getenv("DOLT_RATES_REMOTE", "post-no-preference/rates")
-DOLT_RAW_RATES_DIR   = os.getenv("DOLT_RAW_RATES_DIR", "data/raw/dolt/rates")
+DOLT_STOCKS_REMOTE   = os.getenv("DOLT_STOCKS_REMOTE", "post-no-preference/stocks")
+DOLT_RAW_STOCKS_DIR   = os.getenv("DOLT_RAW_STOCKS_DIR", "data/raw/dolt/stocks")
 DOLT_PROC_DIR   = os.getenv("DOLT_PROC_DIR", "data/processed/dolt")
-RAW_DOLT_DIR  = os.getenv("RAW_DOLT_DIR",   f"{PROJECT_ROOT}/{DOLT_RAW_RATES_DIR}")
+RAW_DOLT_DIR  = os.getenv("RAW_DOLT_DIR",   f"{PROJECT_ROOT}/{DOLT_RAW_STOCKS_DIR}")
 DOLT_PROC_DIR = os.getenv("DOLT_PROC_DIR", f"{PROJECT_ROOT}/data/processed/dolt")
-DUCKDB_PATH = f"{DOLT_PROC_DIR}/rates.duckdb"
+DUCKDB_PATH = f"{DOLT_PROC_DIR}/stocks.duckdb"
 
 # ---- Config ----
-REPO_NAME   = os.getenv("DOLT_RATES_REPO", "rates")
+REPO_NAME   = os.getenv("DOLT_STOCKS_REPO", "stocks")
 
 RAW_DIR  = os.path.join(PROJECT_ROOT, "data", "raw",  "dolt", REPO_NAME)
 DB_PATH  = os.path.join(PROJECT_ROOT, "data", "processed", "dolt", f"{REPO_NAME}.duckdb")
 REPO_ROOT = os.path.join(PROJECT_ROOT, "data", "raw", "dolt")
 
-# print(f"[DEBUG] DOLT_RATES_REMOTE: {DOLT_RATES_REMOTE}")
-# print(f"[DEBUG] DOLT_RAW_RATES_DIR: {DOLT_RAW_RATES_DIR}")
-# print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
-# print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
-# print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
+print(f"[DEBUG] DOLT_STOCKS_REMOTE: {DOLT_STOCKS_REMOTE}")
+print(f"[DEBUG] DOLT_RAW_STOCKS_DIR: {DOLT_RAW_STOCKS_DIR}")
+print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
+print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
+print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
 
-EXPECTED_TABLES = ["us_treasury"]
+EXPECTED_TABLES = [
+    "symbol", 
+    "ohlcv", 
+    "split", 
+    "dividend"
+]
 
 # Primary keys
 PK_MAP = {
-    "us_treasury": ["date", "term"],
+    "symbol":   ["act_symbol"],                      # ticker is unique
+    "ohlcv":    ["act_symbol", "date"],              # per day per symbol
+    "split":    ["act_symbol", "ex_date"],           # sometimes effective_date
+    "dividend": ["act_symbol", "ex_date"],           # ex_date usually unique per symbol
 }
 
 default_args = dict(
@@ -78,12 +86,12 @@ default_args = dict(
 )
 
 with DAG(
-    dag_id="ingest_dolt_rates",
+    dag_id="ingest_dolt_stocks",
     start_date=datetime(2025, 8, 1),
     schedule_interval="0 7 * * 1-5",  # weekdays 07:00 UTC
     catchup=False,
     default_args=default_args,
-    description="Dump Dolt 'rates' CSVs and load directly into DuckDB (UPSERT).",
+    description="Dump Dolt 'stocks' CSVs and load directly into DuckDB (UPSERT).",
     max_active_runs=1,
 ) as dag:
 
@@ -92,15 +100,13 @@ with DAG(
         bash_command=f'export PATH="{DOLT_EXTRA_PATH}:$PATH"; {DOLT_BIN} version',
     )
 
-    # Branch: reuse today's CSV if fresh
     def _branch_on_fresh_csv(**_):
         os.makedirs(RAW_DIR, exist_ok=True)
-        def is_today(path):
-            if not os.path.exists(path): return False
-            d = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc).date()
-            return d == datetime.now(timezone.utc).date()
-
-        ok = all(is_today(os.path.join(RAW_DIR, f"{t}.csv")) for t in EXPECTED_TABLES)
+        def fresh(p):
+            if not os.path.exists(p): return False
+            m = datetime.fromtimestamp(os.path.getmtime(p), tz=timezone.utc).date()
+            return m == datetime.now(timezone.utc).date()
+        ok = all(fresh(os.path.join(RAW_DIR, f"{t}.csv")) for t in EXPECTED_TABLES)
         return "use_existing_csv" if ok else "dolt_dump_csv"
 
     branch = BranchPythonOperator(
@@ -112,7 +118,7 @@ with DAG(
         mapping = {t: os.path.join(RAW_DIR, f"{t}.csv") for t in EXPECTED_TABLES}
         missing = [t for t, p in mapping.items() if not os.path.exists(p)]
         if missing:
-            raise FileNotFoundError(f"Missing CSV(s): {missing}")
+            raise FileNotFoundError(f"Missing CSVs: {missing}")
         return mapping
 
     use_existing_csv = PythonOperator(
@@ -125,12 +131,12 @@ with DAG(
         os.makedirs(RAW_DIR, exist_ok=True)
         mapping = dolt_dump_repo(
             repo_root=REPO_ROOT,
-            remote=DOLT_RATES_REMOTE,
+            remote=DOLT_STOCKS_REMOTE,
             repo_name=REPO_NAME,
             out_dir=RAW_DIR,
             dolt_bin=DOLT_BIN,
         )
-        # filter to expected tables (repo may ship extras later)
+        # filter to expected (repo could add extras later)
         mapping = {t: p for t, p in mapping.items() if t in EXPECTED_TABLES}
         if len(mapping) != len(EXPECTED_TABLES):
             print(f"[WARN] Missing after dump: {sorted(set(EXPECTED_TABLES) - set(mapping.keys()))}")
@@ -153,16 +159,13 @@ with DAG(
 
         load_many_csvs_to_duckdb(db_path=DB_PATH, table_to_csv=table_to_csv, pk_map=PK_MAP)
 
-        # Small sanity: log row count + staged columns
+        # tiny sanity
         import duckdb
         with duckdb.connect(DB_PATH) as con:
             for t in sorted(table_to_csv.keys()):
-                # Count
                 cnt = con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-                print(f'[DuckDB] {t}: {cnt:,} rows')
-                # Schema
                 cols = [r[0] for r in con.execute(f"PRAGMA table_info('{t}')").fetchall()]
-                print(f'[DuckDB] {t} columns: {cols}')
+                print(f'[DuckDB] {t:8s} rows: {cnt:,}  | cols: {cols}')
 
     load_duckdb = PythonOperator(
         task_id="load_duckdb",

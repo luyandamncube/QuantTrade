@@ -6,25 +6,6 @@ from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
 from dotenv import load_dotenv
 
-# # wiring for project root imports
-# import sys
-# PROJECT_ROOT = os.getenv("QT_ROOT", "/mnt/c/Users/luyanda/workspace/QuantTrade")
-# if PROJECT_ROOT not in sys.path:
-#     sys.path.append(PROJECT_ROOT)
-
-# from utils.dolt_to_duckdb import dolt_dump_repo, load_many_csvs_to_duckdb
-
-# # ---- Config ----
-# DOLT_BIN   = os.getenv("DOLT_BIN", "/usr/local/bin/dolt")
-# EXTRA_PATH = "/usr/local/bin:/usr/bin:/bin"
-
-# DOLT_REMOTE = os.getenv("DOLT_EARNINGS_REMOTE", "post-no-preference/rates")
-# REPO_NAME   = os.getenv("DOLT_RATES_REPO", "rates")
-
-# RAW_DIR  = os.path.join(PROJECT_ROOT, "data", "raw",  "dolt", REPO_NAME)
-# DB_PATH  = os.path.join(PROJECT_ROOT, "data", "processed", "dolt", f"{REPO_NAME}.duckdb")
-# REPO_ROOT = os.path.join(PROJECT_ROOT, "data", "raw", "dolt")
-
 # STEP 1: Log DAG python script to airflow
 import sys,os
 import logging
@@ -77,11 +58,11 @@ RAW_DIR  = os.path.join(PROJECT_ROOT, "data", "raw",  "dolt", REPO_NAME)
 DB_PATH  = os.path.join(PROJECT_ROOT, "data", "processed", "dolt", f"{REPO_NAME}.duckdb")
 REPO_ROOT = os.path.join(PROJECT_ROOT, "data", "raw", "dolt")
 
-print(f"[DEBUG] DOLT_EARNINGS_REMOTE: {DOLT_EARNINGS_REMOTE}")
-print(f"[DEBUG] DOLT_RAW_EARNINGS_DIR: {DOLT_RAW_EARNINGS_DIR}")
-print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
-print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
-print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
+# print(f"[DEBUG] DOLT_EARNINGS_REMOTE: {DOLT_EARNINGS_REMOTE}")
+# print(f"[DEBUG] DOLT_RAW_EARNINGS_DIR: {DOLT_RAW_EARNINGS_DIR}")
+# print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
+# print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
+# print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
 
 EXPECTED_TABLES = [
     "balance_sheet_assets",

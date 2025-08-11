@@ -1,4 +1,3 @@
-# QuantTrade/airflow/dags/020_ingest_dolt_options.py
 import os
 from datetime import datetime, timedelta, timezone
 from airflow import DAG
@@ -33,8 +32,6 @@ if PROJECT_ROOT not in sys.path:
 
 # Try import manually to catch errors
 try:
-    from utils.ingest_alpaca_minute import ingest_symbol
-    print("✅ Import succeeded: ingest_symbol_minute_data")
     from utils.dolt_to_duckdb import dolt_dump, load_csv_to_duckdb
     print("✅ Import succeeded: dolt_to_duckdb")
 except Exception as e:
@@ -47,16 +44,16 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 DOLT_BIN = os.getenv("DOLT_BIN", "/usr/local/bin/dolt")
 DOLT_EXTRA_PATH = os.getenv("DOLT_EXTRA_PATH", "/usr/local/bin/dolt")
 
-DOLT_REMOTE   = os.getenv("DOLT_REMOTE", "post-no-preference/options")
+DOLT_OPTIONS_REMOTE   = os.getenv("DOLT_OPTIONS_REMOTE", "post-no-preference/options")
 DOLT_RAW_OPTIONS_DIR   = os.getenv("DOLT_RAW_OPTIONS_DIR", "data/raw/dolt/options")
-DOLT_PROC_OPTIONS_DIR   = os.getenv("DOLT_PROC_OPTIONS_DIR", "data/processed/dolt")
+DOLT_PROC_DIR   = os.getenv("DOLT_PROC_DIR", "data/processed/dolt")
 RAW_DOLT_DIR  = os.getenv("RAW_DOLT_DIR",   f"{PROJECT_ROOT}/{DOLT_RAW_OPTIONS_DIR}")
-DOLT_PROC_OPTIONS_DIR = os.getenv("DOLT_PROC_OPTIONS_DIR", f"{PROJECT_ROOT}/data/processed/dolt")
-DUCKDB_PATH = f"{DOLT_PROC_OPTIONS_DIR}/options.duckdb"
+DOLT_PROC_DIR = os.getenv("DOLT_PROC_DIR", f"{PROJECT_ROOT}/data/processed/dolt")
+DUCKDB_PATH = f"{DOLT_PROC_DIR}/options.duckdb"
 
-# print(f"[DEBUG] DOLT_REMOTE: {DOLT_REMOTE}")
+# print(f"[DEBUG] DOLT_OPTIONS_REMOTE: {DOLT_OPTIONS_REMOTE}")
 # print(f"[DEBUG] DOLT_RAW_OPTIONS_DIR: {DOLT_RAW_OPTIONS_DIR}")
-# print(f"[DEBUG] DOLT_PROC_OPTIONS_DIR: {DOLT_PROC_OPTIONS_DIR}")
+# print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
 # print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
 # print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
 
@@ -122,7 +119,7 @@ with DAG(
         os.makedirs(RAW_DOLT_DIR, exist_ok=True)
         chain_csv, vol_csv = dolt_dump(
             repo_root=os.path.join(PROJECT_ROOT, "data", "raw", "dolt"),
-            remote=DOLT_REMOTE,
+            remote=DOLT_OPTIONS_REMOTE,
             out_dir=RAW_DOLT_DIR,
             dolt_bin=DOLT_BIN,
         )
