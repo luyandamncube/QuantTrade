@@ -1,0 +1,41 @@
+erDiagram
+main__dividend {
+  string act_symbol
+  date ex_date
+  float amount
+}
+main__ohlcv {
+  date date
+  string act_symbol
+  float open
+  float high
+  float low
+  float close
+  int volume
+}
+main__split {
+  string act_symbol
+  date ex_date
+  float to_factor
+  float for_factor
+}
+main__symbol {
+  string act_symbol
+  string security_name
+  string listing_exchange
+  string market_category
+  int is_etf
+  int round_lot_size
+  int is_test_issue
+  string financial_status
+  string cqs_symbol
+  string nasdaq_symbol
+  int is_next_shares
+  date last_seen
+}
+main__split }o--|| main__dividend : "act_symbol→act_symbol, ex_date→ex_date (inferred)"
+main__dividend }o--|| main__split : "act_symbol→act_symbol, ex_date→ex_date (inferred)"
+main__dividend }o--|| main__symbol : "act_symbol→act_symbol (inferred)"
+main__ohlcv }o--|| main__symbol : "act_symbol→act_symbol (inferred)"
+main__split }o--|| main__symbol : "act_symbol→act_symbol (inferred)"
+main__dividend }o--o{ main__split : "shared keys: act_symbol, ex_date"

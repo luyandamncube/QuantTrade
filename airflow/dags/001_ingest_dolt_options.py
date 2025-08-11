@@ -1,15 +1,22 @@
 import os
+import re
+import sys
+import logging
+import importlib
+import subprocess
 from datetime import datetime, timedelta, timezone
+
+import duckdb
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.exceptions import AirflowSkipException
 from dotenv import load_dotenv
 
-# STEP 1: Log DAG python script to airflow
-import sys,os
-import logging
-
+# ----------------------------
+# Init logging + project paths
+# ----------------------------
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("dag_logger")
 
@@ -20,17 +27,15 @@ except NameError:
 
 logger.info(f"[DAG INIT] __file__: {current_file}")
 logger.info(f"[DAG INIT] sys.path: {sys.path}")
-
 print(f"[DEBUG] __file__: {current_file}")
 
-# STEP 2: Inject Project root safely into sys.path
-original_sys_path = sys.path.copy()
 PROJECT_ROOT = os.getcwd()
-
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# Try import manually to catch errors
+# ----------------------------
+# Imports from local utilities
+# ----------------------------
 try:
     from utils.dolt_to_duckdb import dolt_dump, load_csv_to_duckdb
     print("✅ Import succeeded: dolt_to_duckdb")
@@ -38,39 +43,240 @@ except Exception as e:
     print(f"❌ Import failed: {e}")
     raise
 
-# STEP 2:  Load environment variables ---
+# ----------------------------
+# Environment & config
+# ----------------------------
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 DOLT_BIN = os.getenv("DOLT_BIN", "/usr/local/bin/dolt")
-DOLT_EXTRA_PATH = os.getenv("DOLT_EXTRA_PATH", "/usr/local/bin/dolt")
+DOLT_EXTRA_PATH = os.getenv("DOLT_EXTRA_PATH", "/usr/local/bin")
 
-DOLT_OPTIONS_REMOTE   = os.getenv("DOLT_OPTIONS_REMOTE", "post-no-preference/options")
-DOLT_RAW_OPTIONS_DIR   = os.getenv("DOLT_RAW_OPTIONS_DIR", "data/raw/dolt/options")
-DOLT_PROC_DIR   = os.getenv("DOLT_PROC_DIR", "data/processed/dolt")
-RAW_DOLT_DIR  = os.getenv("RAW_DOLT_DIR",   f"{PROJECT_ROOT}/{DOLT_RAW_OPTIONS_DIR}")
-DOLT_PROC_DIR = os.getenv("DOLT_PROC_DIR", f"{PROJECT_ROOT}/data/processed/dolt")
-DUCKDB_PATH = f"{DOLT_PROC_DIR}/options.duckdb"
+DOLT_OPTIONS_REMOTE = os.getenv("DOLT_OPTIONS_REMOTE", "post-no-preference/options")
+REPO_NAME = os.getenv("DOLT_OPTIONS_REPO", "options")  # used for folder + filenames
+
+RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "dolt", REPO_NAME)
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "processed", "dolt", f"{REPO_NAME}.duckdb")
+REPO_ROOT = os.path.join(PROJECT_ROOT, "data", "raw", "dolt")
 
 # print(f"[DEBUG] DOLT_OPTIONS_REMOTE: {DOLT_OPTIONS_REMOTE}")
-# print(f"[DEBUG] DOLT_RAW_OPTIONS_DIR: {DOLT_RAW_OPTIONS_DIR}")
-# print(f"[DEBUG] DOLT_PROC_DIR: {DOLT_PROC_DIR}")
-# print(f"[DEBUG] RAW_DOLT_DIR: {RAW_DOLT_DIR}")
-# print(f"[DEBUG] DUCKDB_PATH: {DUCKDB_PATH}")
+# print(f"[DEBUG] RAW_DIR: {RAW_DIR}")
+# print(f"[DEBUG] DB_PATH: {DB_PATH}")
+
+EXPECTED_TABLES = ["option_chain", "volatility_history"]
+
+# Primary keys (UPSERT + optional ERD inference later if you add more tables)
+PK_MAP = {
+    "option_chain":       ["symbol", "expiry", "strike", "right", "quote_date"],
+    "volatility_history": ["symbol", "date"],
+}
 
 default_args = dict(
     owner="quant",
-    depends_on_past=False,
     retries=1,
     retry_delay=timedelta(minutes=5),
 )
+
+# ----------------------------
+# Mermaid helpers (pure Python)
+# ----------------------------
+def _norm_type(dt: str) -> str:
+    dt = dt.upper()
+    if "INT" in dt: return "int"
+    if any(k in dt for k in ["DOUBLE", "REAL", "FLOAT", "DECIMAL", "NUMERIC"]): return "float"
+    if "DATE" in dt: return "date"
+    if "TIMESTAMP" in dt: return "timestamp"
+    if any(k in dt for k in ["CHAR", "TEXT", "STRING", "VARCHAR"]): return "string"
+    return "string"
+
+def _safe_ident(s: str) -> str:
+    # Mermaid entity identifiers: [A-Za-z_][A-Za-z0-9_]*
+    x = re.sub(r"[^A-Za-z0-9_]", "_", s)
+    if not x or not re.match(r"[A-Za-z_]", x):
+        x = f"t_{x}" if x else "t_"
+    return x
+
+def _safe_attr(name: str) -> str:
+    # Mermaid attributes must start with letter/underscore; e.g., '52w_high' -> 'c_52w_high'
+    y = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if not re.match(r"[A-Za-z_]", y):
+        y = f"c_{y}"
+    return y
+
+def _infer_fk_edges_from_pk_map(tables, cols_by_table, pk_map):
+    """
+    Infer edges where a table contains ALL PK columns of another table (case-insensitive).
+    Returns:
+      - inferred: (child_schema, child_table, [child_cols], parent_schema, parent_table, [parent_pk_cols])
+      - peers: ((s1, t1), (s2, t2), [shared_pk_cols])
+    """
+    table_keys = [(s, t) for (s, t) in tables]
+
+    # lowercase column lookup per table
+    lc_cols = {}
+    for k in table_keys:
+        existing = cols_by_table.get(k, [])
+        lc_cols[k] = {c.lower(): c for (c, _dt) in existing}
+
+    # actual PKs with real casing
+    pk_actual = {}
+    for (_, t) in table_keys:
+        if t in pk_map:
+            want = [c.lower() for c in pk_map[t]]
+            k = next(k for k in table_keys if k[1] == t)
+            actual_cols = [lc_cols[k][c] for c in want if c in lc_cols[k]]
+            if len(actual_cols) == len(pk_map[t]):
+                pk_actual[k] = actual_cols
+
+    # child contains parent's full PK set → inferred edge
+    inferred_edges, seen_pairs = [], set()
+    for parent_k, parent_pk_cols in pk_actual.items():
+        ps, pt = parent_k
+        for child_k in table_keys:
+            if child_k == parent_k:
+                continue
+            cs, ct = child_k
+            if all(c.lower() in lc_cols[child_k] for c in parent_pk_cols):
+                child_cols_actual = [lc_cols[child_k][c.lower()] for c in parent_pk_cols]
+                pair = (cs, ct, ps, pt)
+                if pair not in seen_pairs:
+                    inferred_edges.append((cs, ct, child_cols_actual, ps, pt, parent_pk_cols))
+                    seen_pairs.add(pair)
+
+    # peer links (same PK set)
+    peers, done = [], set()
+    items = list(pk_actual.items())
+    for i in range(len(items)):
+        (s1, t1), pk1 = items[i]
+        set1 = tuple(sorted([c.lower() for c in pk1]))
+        for j in range(i + 1, len(items)):
+            (s2, t2), pk2 = items[j]
+            set2 = tuple(sorted([c.lower() for c in pk2]))
+            if set1 == set2 and (s1, t1) != (s2, t2):
+                key = tuple(sorted([(s1, t1), (s2, t2)]))
+                if key not in done:
+                    peers.append(((s1, t1), (s2, t2), [lc_cols[(s1, t1)][c] for c in set1]))
+                    done.add(key)
+
+    return inferred_edges, peers
+
+def generate_mermaid_erd(db_path: str, out_dir: str, erd_name: str, pk_map: dict | None = None) -> str:
+    """DuckDB → Mermaid erDiagram (sanitized, with declared FKs + optional PK inference)."""
+    os.makedirs(out_dir, exist_ok=True)
+    out_mmd = os.path.join(out_dir, f"{erd_name}.mmd")
+
+    with duckdb.connect(db_path) as con:
+        tables = con.execute("""
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type='BASE TABLE'
+            ORDER BY table_schema, table_name
+        """).fetchall()
+
+        cols = con.execute("""
+            SELECT table_schema, table_name, column_name, data_type
+            FROM information_schema.columns
+            ORDER BY table_schema, table_name, ordinal_position
+        """).fetchall()
+
+        pks = con.execute("""
+            SELECT tc.table_schema, tc.table_name, kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema    = kcu.table_schema
+            WHERE tc.constraint_type = 'PRIMARY KEY'
+        """).fetchall()
+
+        fks = con.execute("""
+            SELECT
+              src.table_schema AS fk_schema,
+              src.table_name   AS fk_table,
+              src.column_name  AS fk_column,
+              tgt.table_schema AS pk_schema,
+              tgt.table_name   AS pk_table,
+              tgt.column_name  AS pk_column
+            FROM information_schema.referential_constraints rc
+            JOIN information_schema.key_column_usage src
+              ON rc.constraint_name = src.constraint_name
+            JOIN information_schema.key_column_usage tgt
+              ON rc.unique_constraint_name = tgt.constraint_name
+             AND src.ordinal_position = tgt.ordinal_position
+            ORDER BY fk_schema, fk_table, src.ordinal_position
+        """).fetchall()
+
+    from collections import defaultdict
+    cols_by_table = defaultdict(list)
+    pk_by_table   = defaultdict(set)
+    for s, t, c, dt in cols:
+        cols_by_table[(s, t)].append((c, dt))
+    for s, t, c in pks:
+        pk_by_table[(s, t)].add(c)
+
+    lines = ["erDiagram"]
+    alias_notes = []
+
+    # Entities
+    for s, t in tables:
+        ent = _safe_ident(f"{s}__{t}")
+        lines.append(f"{ent} {{")
+        for c, dt in cols_by_table[(s, t)]:
+            typ = _norm_type(dt)
+            safe_c = _safe_attr(c)
+            if safe_c != c:
+                alias_notes.append(f"%% {s}.{t}.{c} → {safe_c}")
+            suffix = " PK" if c in pk_by_table[(s, t)] else ""
+            lines.append(f"  {typ} {safe_c}{suffix}")
+        lines.append("}")
+
+    # Declared FK relationships (if any)
+    edges_declared = set()
+    for fs, ft, fc, ps, pt, pc in fks:
+        a = _safe_ident(f"{fs}__{ft}")
+        b = _safe_ident(f"{ps}__{pt}")
+        label = f'{fc}→{pc}'.replace('"', r"\"")
+        lines.append(f'{a} }}o--|| {b} : "{label}"')
+        edges_declared.add(((fs, ft), (ps, pt)))
+
+    # Inferred edges + peer links (if provided)
+    if pk_map:
+        inferred, peers = _infer_fk_edges_from_pk_map(tables, cols_by_table, pk_map)
+        for cs, ct, child_cols, ps, pt, parent_pk_cols in inferred:
+            if ((cs, ct), (ps, pt)) in edges_declared:
+                continue
+            a = _safe_ident(f"{cs}__{ct}")
+            b = _safe_ident(f"{ps}__{pt}")
+            label = ", ".join([f"{cc}→{pc}" for cc, pc in zip(child_cols, parent_pk_cols)]).replace('"', r"\"")
+            lines.append(f'{a} }}o--|| {b} : "{label} (inferred)"')
+
+        for (s1, t1), (s2, t2), shared_actual in peers:
+            a = _safe_ident(f"{s1}__{t1}")
+            b = _safe_ident(f"{s2}__{t2}")
+            label = ", ".join(shared_actual).replace('"', r"\"")
+            lines.append(f'{a} }}o--o{{ {b} : "shared keys: {label}"')
+
+    if alias_notes:
+        lines = ["%% Column alias mapping for Mermaid-safe names"] + alias_notes + [""] + lines
+
+    with open(out_mmd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    # defensive validation: no attribute starts with a digit
+    txt = open(out_mmd, "r", encoding="utf-8").read()
+    if re.search(r"^\s*(int|float|string|date|timestamp)\s+[0-9]", txt, flags=re.M):
+        raise RuntimeError(f"[ERD] Unsafe attribute slipped into {out_mmd}. Check sanitization.")
+    return out_mmd
+
+# ----------------------------
+# DAG
+# ----------------------------
 with DAG(
     dag_id="ingest_dolt_options",
     start_date=datetime(2025, 8, 1),
-    schedule_interval="0 6 * * 1-5",
+    schedule_interval="0 6 * * 1-5",  # weekdays 06:00 UTC
     catchup=False,
     default_args=default_args,
     max_active_runs=1,
-    description="Dump Dolt CSVs and load directly into DuckDB (UPSERT).",
+    description="Dump Dolt 'options' CSVs and load directly into DuckDB (UPSERT).",
 ) as dag:
 
     check_dolt = BashOperator(
@@ -79,33 +285,30 @@ with DAG(
     )
 
     # --- Branch: decide whether to reuse today's CSVs ---
-    def _branch_on_fresh_csv(**kwargs):
-        os.makedirs(RAW_DOLT_DIR, exist_ok=True)
-        chain_csv = os.path.join(RAW_DOLT_DIR, "option_chain.csv")
-        vol_csv   = os.path.join(RAW_DOLT_DIR, "volatility_history.csv")
+    def _branch_on_fresh_csv(**_):
+        os.makedirs(RAW_DIR, exist_ok=True)
+        chain_csv = os.path.join(RAW_DIR, "option_chain.csv")
+        vol_csv   = os.path.join(RAW_DIR, "volatility_history.csv")
 
         def is_today(path: str) -> bool:
             if not os.path.exists(path):
                 return False
-            mtime_utc_date = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc).date()
-            today_utc_date = datetime.now(timezone.utc).date()
-            return mtime_utc_date == today_utc_date
+            mdate = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc).date()
+            return mdate == datetime.now(timezone.utc).date()
 
         return "use_existing_csv" if (is_today(chain_csv) and is_today(vol_csv)) else "dolt_dump_csv"
-
 
     branch = BranchPythonOperator(
         task_id="branch_on_fresh_csv",
         python_callable=_branch_on_fresh_csv,
-        provide_context=True,
     )
 
     # If fresh → push XCom with paths (so load_duckdb can consume)
     def _use_existing():
-        chain_csv = os.path.join(RAW_DOLT_DIR, "option_chain.csv")
-        vol_csv   = os.path.join(RAW_DOLT_DIR, "volatility_history.csv")
+        chain_csv = os.path.join(RAW_DIR, "option_chain.csv")
+        vol_csv   = os.path.join(RAW_DIR, "volatility_history.csv")
         if not (os.path.exists(chain_csv) and os.path.exists(vol_csv)):
-            raise FileNotFoundError("Expected CSVs not found in RAW_DOLT_DIR")
+            raise FileNotFoundError("Expected CSVs not found in RAW_DIR")
         return {"chain_csv": chain_csv, "vol_csv": vol_csv}
 
     use_existing_csv = PythonOperator(
@@ -116,11 +319,11 @@ with DAG(
 
     # Else → perform Dolt dump and return paths
     def _dump():
-        os.makedirs(RAW_DOLT_DIR, exist_ok=True)
+        os.makedirs(RAW_DIR, exist_ok=True)
         chain_csv, vol_csv = dolt_dump(
-            repo_root=os.path.join(PROJECT_ROOT, "data", "raw", "dolt"),
+            repo_root=REPO_ROOT,
             remote=DOLT_OPTIONS_REMOTE,
-            out_dir=RAW_DOLT_DIR,
+            out_dir=RAW_DIR,
             dolt_bin=DOLT_BIN,
         )
         return {"chain_csv": chain_csv, "vol_csv": vol_csv}
@@ -131,31 +334,30 @@ with DAG(
         do_xcom_push=True,
     )
 
-    # Converge branches (optional visual no-op)
+    # Converge branches
     join = EmptyOperator(task_id="join_branches", trigger_rule="none_failed_min_one_success")
 
     # Load into DuckDB (pull XCom from either branch)
     def _load_duckdb(**kwargs):
         ti = kwargs["ti"]
         x = ti.xcom_pull(task_ids=["use_existing_csv", "dolt_dump_csv"])
-        # x can be [dict, None] or [None, dict]; pick the dict
         payload = next((i for i in x if isinstance(i, dict)), None)
         if not payload:
             raise ValueError(f"No XCom payload from branches: {x}")
+
         chain_csv, vol_csv = payload["chain_csv"], payload["vol_csv"]
 
-        # Adjust PKs to your schema
-        load_csv_to_duckdb(DUCKDB_PATH, chain_csv, "option_chain",
-                           pk_cols=['symbol','expiry','strike','right','quote_date'])
-        load_csv_to_duckdb(DUCKDB_PATH, vol_csv, "volatility_history",
-                           pk_cols=['symbol','date'])
+        load_csv_to_duckdb(DB_PATH, chain_csv, "option_chain",
+                           pk_cols=['symbol', 'expiry', 'strike', 'right', 'quote_date'])
+        load_csv_to_duckdb(DB_PATH, vol_csv, "volatility_history",
+                           pk_cols=['symbol', 'date'])
 
         # quick sanity log
-        import duckdb
-        with duckdb.connect(DUCKDB_PATH) as con:
-            c1 = con.execute("SELECT COUNT(*) FROM option_chain").fetchone()[0]
-            c2 = con.execute("SELECT COUNT(*) FROM volatility_history").fetchone()[0]
-            print(f"[DuckDB] option_chain rows: {c1}, volatility_history rows: {c2}")
+        with duckdb.connect(DB_PATH) as con:
+            for t in ["option_chain", "volatility_history"]:
+                cnt = con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                cols = [r[0] for r in con.execute(f"PRAGMA table_info('{t}')").fetchall()]
+                print(f"[DuckDB] {t}: {cnt:,} rows; columns: {cols}")
 
     load_duckdb = PythonOperator(
         task_id="load_duckdb",
@@ -164,7 +366,86 @@ with DAG(
         trigger_rule="none_failed_min_one_success",  # run if either branch succeeds
     )
 
+    # --- Mermaid generation + render (Python-only) ---
+    def _make_erd(**_):
+        # store under docs/erd/<repo>/<repo>.*
+        erd_dir = os.path.join(PROJECT_ROOT, "docs", "erd", REPO_NAME)
+        path = generate_mermaid_erd(db_path=DB_PATH, out_dir=erd_dir, erd_name=REPO_NAME, pk_map=PK_MAP)
+        print(f"[ERD] Mermaid written: {path}")
+        return path
+
+    generate_mermaid_erd_task = PythonOperator(
+        task_id="generate_mermaid_erd",
+        python_callable=_make_erd,
+        provide_context=True,
+    )
+
+    def _render_mermaid_svg_py(**kwargs):
+        ti = kwargs["ti"]
+        mmd_path = ti.xcom_pull(task_ids="generate_mermaid_erd")
+        if not mmd_path or not os.path.exists(mmd_path):
+            raise FileNotFoundError(f"[ERD] Mermaid file not found: {mmd_path}")
+        svg_path = mmd_path.replace(".mmd", ".svg")
+
+        def ensure(pkg: str):
+            try:
+                return importlib.import_module(pkg)
+            except ImportError:
+                print(f"[ERD] Installing {pkg} ...")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+                return importlib.import_module(pkg)
+
+        try:
+            # Defensive sanitize pass on the .mmd (guards against stale files)
+            with open(mmd_path, "r", encoding="utf-8") as f:
+                txt = f.read()
+
+            def _fix_line(m):
+                t = m.group(1)
+                name = m.group(2)
+                fixed = name
+                if not re.match(r"[A-Za-z_]", name):
+                    fixed = "c_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
+                return f"{t} {fixed}"
+
+            txt = re.sub(r"^(int|float|string|date|timestamp)\s+([^\s]+)", _fix_line, txt, flags=re.M)
+
+            with open(mmd_path, "w", encoding="utf-8") as f:
+                f.write(txt)
+
+            print("[ERD] First lines of Mermaid file:")
+            for i, line in enumerate(txt.splitlines()[:30], 1):
+                print(f"{i:02d}: {line}")
+
+            # Render via Python package mermaid_cli + Playwright
+            ensure("mermaid_cli")
+            ensure("playwright")
+            try:
+                subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+            except Exception as e:
+                print(f"[ERD] playwright chromium install warning: {e}")
+
+            from mermaid_cli import render_mermaid_file_sync
+            render_mermaid_file_sync(input_file=mmd_path, output_file=svg_path, output_format="svg")
+            print(f"[ERD] SVG rendered: {svg_path}")
+            return svg_path
+
+        except subprocess.CalledProcessError as e:
+            print(f"[ERD] Dependency install failed, skipping SVG: {e}")
+            raise AirflowSkipException("Skipped: mermaid-cli unavailable")
+        except Exception as e:
+            print(f"[ERD] Render failed, skipping SVG: {e}")
+            raise AirflowSkipException("Skipped: could not render Mermaid to SVG")
+
+    render_mermaid_svg_py = PythonOperator(
+        task_id="render_mermaid_svg_py",
+        python_callable=_render_mermaid_svg_py,
+        provide_context=True,
+    )
+
+    # Wiring
     check_dolt >> branch
     branch >> use_existing_csv >> join
     branch >> dolt_dump_csv     >> join
     join >> load_duckdb
+    load_duckdb >> generate_mermaid_erd_task >> render_mermaid_svg_py

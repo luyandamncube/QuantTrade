@@ -274,28 +274,37 @@ def dolt_dump_repo(repo_root: str, remote: str, repo_name: str, out_dir: str,
       {table_name_without_ext: absolute_csv_path}
     """
     from pathlib import Path
-    import os
+    import shutil, os
 
     repo_root = Path(repo_root)
     out_dir   = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     env = {"PATH": f"/usr/local/bin:/usr/bin:/bin:{os.environ.get('PATH','')}"}
 
-    if not (repo_root / repo_name).exists():
+    repo_dir = repo_root / repo_name
+    is_repo = (repo_dir / ".dolt").exists()
+
+    # If folder exists but not a Dolt repo, remove it (or move aside) and clone fresh
+    if repo_dir.exists() and not is_repo:
+        print(f"[dolt_dump_repo] '{repo_dir}' exists but is not a Dolt repo. Recreating...")
+        shutil.rmtree(repo_dir)
+
+    if not repo_dir.exists():
         repo_root.mkdir(parents=True, exist_ok=True)
         print(run_cmd(f'{dolt_bin} clone {remote} {repo_name}', cwd=repo_root, env=env))
     else:
-        print(run_cmd(f'{dolt_bin} pull', cwd=repo_root / repo_name, env=env))
+        # repo exists and has .dolt
+        print(run_cmd(f'{dolt_bin} pull', cwd=repo_dir, env=env))
 
-    print(run_cmd(f'{dolt_bin} dump -r csv -f', cwd=repo_root / repo_name, env=env))
+    print(run_cmd(f'{dolt_bin} dump -r csv -f', cwd=repo_dir, env=env))
 
-    src = repo_root / repo_name / "doltdump"
+    src = repo_dir / "doltdump"
     if not src.exists():
         raise FileNotFoundError(f"Dolt dump directory not found: {src}")
 
     mapping = {}
     for p in src.glob("*.csv"):
-        table = p.stem  # e.g. 'us_treasury'
+        table = p.stem
         dest  = out_dir / p.name
         dest.write_bytes(p.read_bytes())
         mapping[table] = str(dest)

@@ -1,0 +1,223 @@
+erDiagram
+main__balance_sheet_assets {
+  date date
+  string act_symbol
+  string period
+  int cash_and_equivalents
+  int receivables
+  int notes_receivable
+  int inventories
+  int other_current_assets
+  int total_current_assets
+  int net_property_and_equipment
+  int investments_and_advances
+  int other_non_current_assets
+  int deferred_charges
+  int intangibles
+  int deposits_and_other_assets
+  int total_assets
+}
+main__balance_sheet_equity {
+  string act_symbol
+  date date
+  string period
+  int preferred_stock
+  int common_stock
+  int capital_surplus
+  int retained_earnings
+  int other_equity
+  int treasury_stock
+  int total_equity
+  int total_liabilities_and_equity
+  int shares_outstanding
+  float book_value_per_share
+}
+main__balance_sheet_liabilities {
+  string act_symbol
+  date date
+  string period
+  int notes_payable
+  int accounts_payable
+  int current_portion_long_term_debt
+  int current_portion_capital_leases
+  int accrued_expenses
+  int income_taxes_payable
+  int other_current_liabilities
+  int total_current_liabilities
+  int mortgages
+  int deferred_taxes_or_income
+  int convertible_debt
+  int long_term_debt
+  int non_current_capital_leases
+  int other_non_current_liabilities
+  int minority_interest
+  int total_liabilities
+}
+main__cash_flow_statement {
+  string act_symbol
+  date date
+  string period
+  int net_income
+  int depreciation_amortization_and_depletion
+  int net_change_from_assets
+  int net_cash_from_discontinued_operations
+  int other_operating_activities
+  int net_cash_from_operating_activities
+  int property_and_equipment
+  int acquisition_of_subsidiaries
+  int investments
+  int other_investing_activities
+  int net_cash_from_investing_activities
+  int issuance_of_capital_stock
+  int issuance_of_debt
+  int increase_short_term_debt
+  int payment_of_dividends_and_other_distributions
+  int other_financing_activities
+  int net_cash_from_financing_activities
+  int effect_of_exchange_rate_changes
+  int net_change_in_cash_and_equivalents
+  int cash_at_beginning_of_period
+  int cash_at_end_of_period
+  float diluted_net_eps
+}
+main__earnings_calendar {
+  string act_symbol
+  date date
+  string when
+}
+main__eps_estimate {
+  date date
+  string act_symbol
+  string period
+  date period_end_date
+  float consensus
+  float recent
+  int count
+  float high
+  float low
+  float year_ago
+}
+main__eps_history {
+  string act_symbol
+  date period_end_date
+  float reported
+  float estimate
+}
+main__income_statement {
+  string act_symbol
+  date date
+  string period
+  int sales
+  int cost_of_goods
+  int gross_profit
+  int selling_administrative_depreciation_amortization_expenses
+  int income_after_depreciation_and_amortization
+  int non_operating_income
+  int interest_expense
+  int pretax_income
+  int income_taxes
+  int minority_interest
+  int investment_gains
+  int other_income
+  int income_from_continuing_operations
+  int extras_and_discontinued_operations
+  int net_income
+  int income_before_depreciation_and_amortization
+  int depreciation_and_amortization
+  int average_shares
+  float diluted_eps_before_non_recurring_items
+  float diluted_net_eps
+}
+main__rank_score {
+  date date
+  string act_symbol
+  string rank
+  string value
+  string growth
+  string momentum
+  string vgm
+}
+main__sales_estimate {
+  date date
+  string act_symbol
+  string period
+  date period_end_date
+  int consensus
+  int count
+  int high
+  int low
+  int year_ago
+}
+main__balance_sheet_equity }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__balance_sheet_assets : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__balance_sheet_equity : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__balance_sheet_liabilities : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__cash_flow_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__cash_flow_statement }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__eps_estimate }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__income_statement }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__rank_score }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__sales_estimate }o--|| main__earnings_calendar : "act_symbol→act_symbol, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__eps_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__eps_history : "act_symbol→act_symbol, period_end_date→period_end_date (inferred)"
+main__sales_estimate }o--|| main__eps_history : "act_symbol→act_symbol, period_end_date→period_end_date (inferred)"
+main__balance_sheet_assets }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__sales_estimate }o--|| main__income_statement : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_equity }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_liabilities }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__cash_flow_statement }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__eps_estimate }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__income_statement }o--|| main__sales_estimate : "act_symbol→act_symbol, period→period, date→date (inferred)"
+main__balance_sheet_assets }o--o{ main__balance_sheet_equity : "shared keys: act_symbol, date, period"
+main__balance_sheet_assets }o--o{ main__balance_sheet_liabilities : "shared keys: act_symbol, date, period"
+main__balance_sheet_assets }o--o{ main__cash_flow_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_assets }o--o{ main__eps_estimate : "shared keys: act_symbol, date, period"
+main__balance_sheet_assets }o--o{ main__income_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_assets }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
+main__balance_sheet_equity }o--o{ main__balance_sheet_liabilities : "shared keys: act_symbol, date, period"
+main__balance_sheet_equity }o--o{ main__cash_flow_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_equity }o--o{ main__eps_estimate : "shared keys: act_symbol, date, period"
+main__balance_sheet_equity }o--o{ main__income_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_equity }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
+main__balance_sheet_liabilities }o--o{ main__cash_flow_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_liabilities }o--o{ main__eps_estimate : "shared keys: act_symbol, date, period"
+main__balance_sheet_liabilities }o--o{ main__income_statement : "shared keys: act_symbol, date, period"
+main__balance_sheet_liabilities }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
+main__cash_flow_statement }o--o{ main__eps_estimate : "shared keys: act_symbol, date, period"
+main__cash_flow_statement }o--o{ main__income_statement : "shared keys: act_symbol, date, period"
+main__cash_flow_statement }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
+main__eps_estimate }o--o{ main__income_statement : "shared keys: act_symbol, date, period"
+main__eps_estimate }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
+main__income_statement }o--o{ main__sales_estimate : "shared keys: act_symbol, date, period"
