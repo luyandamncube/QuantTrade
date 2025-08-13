@@ -79,19 +79,19 @@ QuantTrade\data\processed\dolt\stocks.duckdb
 ```
 
 ### Stocks
-![Stocks Pipeline](stocks/stocks.svg)
+![Stocks Pipeline](../docs/pipeline/stocks/stocks.svg)
 
 ### Rates
-![Rates Pipeline](rates/rates.svg)
+![Rates Pipeline](../docs/pipeline/rates/rates.svg)
 
 ### Options
-![Options Pipeline](options/options.svg)
+![Options Pipeline](../docs/pipeline/options/options.svg)
 
 ### Earnings
-![Earnings Pipeline](earnings/earnings.svg)
+![Earnings Pipeline](../docs/pipeline/earnings/earnings.svg)
 
 ### Price Minute
-![Price Minute Pipeline](price_minute/price_minute.svg)
+![Price Minute Pipeline](../docs/pipeline/price_minute/price_minute.svg)
 
 ### DAG Management
 ```bash
