@@ -12,8 +12,8 @@ render_mermaid_svg_py["render_mermaid_svg_py"]
 generate_pipeline_mermaid["generate_pipeline_mermaid"]
 render_pipeline_mermaid_svg["render_pipeline_mermaid_svg"]
 check_dolt --> branch_on_fresh_csv
-branch_on_fresh_csv -->|stale| dolt_dump_csv
 branch_on_fresh_csv -->|fresh| use_existing_csv
+branch_on_fresh_csv -->|stale| dolt_dump_csv
 use_existing_csv --> join_branches
 dolt_dump_csv --> join_branches
 join_branches --> load_duckdb

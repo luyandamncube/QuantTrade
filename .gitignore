@@ -25,3 +25,7 @@ data/raw/alpaca/minute/*
 
 airflow/airflow_venv/*
 airflow/dags/__pycache__/*
+airflow_venv/
+
+notebooks/.ipynb_checkpoints/
+notebooks/etf_dca/.ipynb_checkpoints/

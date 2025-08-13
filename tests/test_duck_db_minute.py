@@ -12,13 +12,13 @@ if PROJECT_ROOT not in sys.path:
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "alpaca", "minute")
-PROCESSED_DB = os.path.join(PROJECT_ROOT, "data", "processed", "alpaca", "minute.duckdb")
+PROCESSED_DB = os.path.join(PROJECT_ROOT, "data", "processed", "alpaca", "price_minute_alpaca.duckdb")
 
 def test_duckdb_connection():
 
     # Step 1: Define DB path
     project_root = Path(__file__).resolve().parent.parent  # Adjust if needed
-    db_path = project_root / "data" / "processed" / "alpaca" / "minute.duckdb"
+    db_path = project_root / "data" / "processed" / "alpaca" / "price_minute_alpaca.duckdb"
 
     if not db_path.exists():
         print(f"DuckDB file not found at: {db_path}")

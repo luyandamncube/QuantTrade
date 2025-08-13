@@ -13,3 +13,4 @@ alpaca-py>=0.10.0
 backtrader
 mermaid-py
 playwright
+psycopg2>=2.9,<3.0

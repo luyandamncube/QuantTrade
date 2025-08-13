@@ -35,6 +35,10 @@ sudo apt install python3.11 python3.11-venv python3.11-dev -y
 ```bash
 chmod +x install_airflow.sh
 ./install_airflow.sh
+
+# OPTIONAL: install postgres to all for parallel runs of DAGs
+chmod +x install_postgres.sh
+./install_postgres.sh
 ```
 
 5. Create and activate a Python virtual environment
@@ -46,11 +50,8 @@ source airflow_venv/bin/activate
 
 6. Run airflow
 ```bash
-# Start scheduler (in one terminal)
-airflow scheduler
-
-# Start webserver (in another terminal or background)
 airflow webserver --port 8080
+airflow scheduler
 ```
 
 7. Open browser and go to
@@ -68,31 +69,29 @@ airflow db upgrade                # Upgrade DB schema if needed
 airflow users create              # Create admin user
 ```
 ### Summary Flow
-- Save duckdb to QuantTrade\data\processed\alpaca\minute.duckdb
-
-```bash
-            +----------------+
-            | Fetch Alpaca   |
-            | 1-min bars     |
-            +-------+--------+
-                    |
-                    v
-      +-------------+--------------+
-      | Load existing CSV (if any) |
-      +-------------+--------------+
-                    |
-                    v
-    +-------------------------------+
-    | Merge + deduplicate by index |
-    +-------------------------------+
-           |                     |
-           v                     v
-     Save as CSV         Save to DuckDB table
-                         - minute_SPY
-                         - minute_QQQ
-                         ...
-
+- Save duckdb to:
 ```
+QuantTrade\data\processed\alpaca\price_minute_alpaca.duckdb
+QuantTrade\data\processed\dolt\earnings.duckdb
+QuantTrade\data\processed\dolt\options.duckdb
+QuantTrade\data\processed\dolt\rates.duckdb
+QuantTrade\data\processed\dolt\stocks.duckdb
+```
+
+### Stocks
+![Stocks Pipeline](stocks/stocks.svg)
+
+### Rates
+![Rates Pipeline](rates/rates.svg)
+
+### Options
+![Options Pipeline](options/options.svg)
+
+### Earnings
+![Earnings Pipeline](earnings/earnings.svg)
+
+### Price Minute
+![Price Minute Pipeline](price_minute/price_minute.svg)
 
 ### DAG Management
 ```bash
