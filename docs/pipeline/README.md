@@ -22,10 +22,6 @@ This folder contains **Mermaid flowcharts** of each data pipeline. The diagrams 
 ### Price Minute
 ![Price Minute Pipeline](price_minute/price_minute.svg)
 
-> Or, if your DAG outputs under `price_minute_alpaca/`:
->
-> ![Price Minute (Alpaca) Pipeline](price_minute_alpaca/price_minute_alpaca.svg)
-
 ## How they’re produced (per DAG)
 
 1. **Generate**: `generate_pipeline_mermaid` writes `docs/pipeline/<dag-name>/<dag-name>.mmd` by walking the DAG’s current tasks and dependencies (Branch tasks are drawn as diamonds).
