@@ -606,11 +606,128 @@ with DAG(
         subprocess.check_call([dot_bin, "-Tsvg", dot_path, "-o", svg_path])
         print(f"[ERD] Graphviz SVG rendered: {svg_path}")
         return svg_path
+    
+    def _safe_node_id(s: str) -> str:
+        nid = re.sub(r"[^A-Za-z0-9_]", "_", s)
+        if not re.match(r"[A-Za-z_]", nid):
+            nid = f"n_{nid}"
+        return nid
+
+    def generate_mermaid_pipeline_flowchart(
+        dag, out_dir: str, name: str, edge_labels: dict[tuple[str, str], str] | None = None, direction: str = "LR"
+    ) -> str:
+        """
+        Build a Mermaid flowchart from the DAG's current task graph.
+        - Nodes: one per task (BranchPythonOperator drawn as a decision diamond).
+        - Edges: for every upstream -> downstream dependency.
+        - Optional edge_labels: {(src_task_id, dst_task_id): "label"}.
+        """
+        os.makedirs(out_dir, exist_ok=True)
+        out_mmd = os.path.join(out_dir, f"{name}.mmd")
+
+        # Map task_id -> safe Mermaid node id
+        tasks = dag.topological_sort()
+        id_map = {t.task_id: _safe_node_id(t.task_id) for t in tasks}
+
+        lines = [
+            '%% Auto-generated from Airflow DAG wiring',
+            '%%{init: {"flowchart": {"curve": "linear"}}}%%',
+            f"flowchart {direction}",
+        ]
+
+        # Draw nodes (diamond for BranchPythonOperator, rectangle for others)
+        for t in tasks:
+            nid = id_map[t.task_id]
+            label = t.task_id.replace('"', r"\"")
+            shape = "{" if isinstance(t, BranchPythonOperator) else "["
+            end   = "}" if isinstance(t, BranchPythonOperator) else "]"
+            lines.append(f'{nid}{shape}"{label}"{end}')
+
+        # Draw edges
+        edge_labels = edge_labels or {}
+        for t in tasks:
+            src = id_map[t.task_id]
+            for d in t.get_direct_relatives(upstream=False):
+                dst = id_map[d.task_id]
+                lbl = edge_labels.get((t.task_id, d.task_id))
+                if lbl:
+                    lbl = lbl.replace('"', r"\"")
+                    lines.append(f"{src} -->|{lbl}| {dst}")
+                else:
+                    lines.append(f"{src} --> {dst}")
+
+        with open(out_mmd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        return out_mmd
+    
+    def _generate_pipeline_mermaid(**_):
+        # store under docs/pipeline/<repo>/<repo>.*
+        pipe_dir = os.path.join(PROJECT_ROOT, "docs", "pipeline", REPO_NAME)
+
+        # Optional labels for branch edges (purely cosmetic)
+        edge_labels = {
+            ("branch_on_fresh_csv", "use_existing_csv"): "fresh",
+            ("branch_on_fresh_csv", "dolt_dump_csv"): "stale",
+        }
+
+        path = generate_mermaid_pipeline_flowchart(dag, out_dir=pipe_dir, name=REPO_NAME, edge_labels=edge_labels, direction="LR")
+        print(f"[PIPELINE] Mermaid flowchart written: {path}")
+        return path
+
+    generate_pipeline_mermaid = PythonOperator(
+        task_id="generate_pipeline_mermaid",
+        python_callable=_generate_pipeline_mermaid,
+        provide_context=True,
+    )
+
+    def _render_pipeline_mermaid_svg(**kwargs):
+        ti = kwargs["ti"]
+        mmd_path = ti.xcom_pull(task_ids="generate_pipeline_mermaid")
+        if not mmd_path or not os.path.exists(mmd_path):
+            raise FileNotFoundError(f"[PIPELINE] Mermaid file not found: {mmd_path}")
+        svg_path = mmd_path.replace(".mmd", ".svg")
+
+        # Use the same Python-only renderer you already have
+        def ensure(pkg: str):
+            try:
+                return importlib.import_module(pkg)
+            except ImportError:
+                print(f"[PIPELINE] Installing {pkg} ...")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+                return importlib.import_module(pkg)
+
+        try:
+            ensure("mermaid_cli")
+            ensure("playwright")
+            try:
+                subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+            except Exception as e:
+                print(f"[PIPELINE] playwright chromium install warning: {e}")
+
+            from mermaid_cli import render_mermaid_file_sync
+            render_mermaid_file_sync(input_file=mmd_path, output_file=svg_path, output_format="svg")
+            print(f"[PIPELINE] SVG rendered: {svg_path}")
+            return svg_path
+
+        except subprocess.CalledProcessError as e:
+            print(f"[PIPELINE] Dependency install failed, skipping SVG: {e}")
+            raise AirflowSkipException("Skipped: mermaid-cli unavailable")
+        except Exception as e:
+            print(f"[PIPELINE] Render failed, skipping SVG: {e}")
+            raise AirflowSkipException("Skipped: could not render pipeline Mermaid to SVG")
+
+    render_pipeline_mermaid_svg = PythonOperator(
+        task_id="render_pipeline_mermaid_svg",
+        python_callable=_render_pipeline_mermaid_svg,
+        provide_context=True,
+    )
 
     # Wiring
     check_dolt >> branch
     branch >> use_existing_csv >> join
     branch >> dolt_dump_csv >> join
     join >> load_duckdb
-    load_duckdb >> generate_mermaid_erd_task >> render_mermaid_svg_py
+    # load_duckdb >> generate_mermaid_erd_task >> render_mermaid_svg_py
+    load_duckdb >> generate_mermaid_erd_task >> render_mermaid_svg_py >> generate_pipeline_mermaid >> render_pipeline_mermaid_svg
+
 

@@ -1,0 +1,22 @@
+%% Auto-generated from Airflow DAG wiring
+%%{init: {"flowchart": {"curve": "linear"}}}%%
+flowchart LR
+ingest_SPY["ingest_SPY"]
+ingest_QQQ["ingest_QQQ"]
+ingest_SPLV["ingest_SPLV"]
+ingest_SHY["ingest_SHY"]
+join_ingest["join_ingest"]
+merge_duckdb["merge_duckdb"]
+generate_mermaid["generate_mermaid"]
+render_mermaid_svg["render_mermaid_svg"]
+generate_pipeline_mermaid["generate_pipeline_mermaid"]
+render_pipeline_mermaid_svg["render_pipeline_mermaid_svg"]
+ingest_SPY --> join_ingest
+ingest_QQQ --> join_ingest
+ingest_SPLV --> join_ingest
+ingest_SHY --> join_ingest
+join_ingest --> merge_duckdb
+merge_duckdb --> generate_mermaid
+generate_mermaid --> render_mermaid_svg
+render_mermaid_svg --> generate_pipeline_mermaid
+generate_pipeline_mermaid --> render_pipeline_mermaid_svg
