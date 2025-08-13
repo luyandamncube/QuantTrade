@@ -13,49 +13,88 @@ def run_cmd(cmd, cwd=None):
         raise RuntimeError(f"Command failed ({cmd}):\n{proc.stdout}")
     return proc.stdout
 
+# def dolt_dump(repo_root: str, remote: str, out_dir: str, dolt_bin: str = "/usr/local/bin/dolt"):
+#     """
+#     Clone (if missing) or 'dolt pull' (if present), then 'dolt dump -r csv'.
+#     Outputs CSVs under out_dir (created if needed).
+#     """
+#     repo_root = Path(repo_root)
+#     out_dir = Path(out_dir)
+#     out_dir.mkdir(parents=True, exist_ok=True)
+#     env = {"PATH": f"/usr/local/bin:/usr/bin:/bin:{os.environ.get('PATH','')}"}
+
+#     # Clone or pull
+#     if not (repo_root / "options").exists():
+#         repo_root.mkdir(parents=True, exist_ok=True)
+#         print(run_cmd(f'{dolt_bin} clone {remote} options', cwd=repo_root, env=env))
+#     else:
+#         print(run_cmd(f'{dolt_bin} pull', cwd=repo_root / "options", env=env))
+
+#     # Dump CSVs
+#     # print(run_cmd(f'{dolt_bin} dump -r csv', cwd=repo_root / "options", env=env))
+#     run_cmd(f"{dolt_bin} dump -r csv -f", cwd=repo_root / "options")
+#     merge_csv(
+#         new_csv=repo_root / "options" / "doltdump" / "option_chain.csv",
+#         old_csv=RAW_DOLT_DIR / "option_chain.csv",
+#         pk_cols=["symbol", "date"]  # or whatever keys your data uses
+#     )
+
+
+#     # Dolt writes to {repo_root}/options/doltdump/*
+#     src = repo_root / "options" / "doltdump"
+#     if not src.exists():
+#         raise FileNotFoundError(f"Dolt dump directory not found: {src}")
+
+#     # Return absolute CSV paths we care about
+#     chain_csv = src / "option_chain.csv"
+#     vol_csv   = src / "volatility_history.csv"
+#     if not chain_csv.exists() or not vol_csv.exists():
+#         raise FileNotFoundError(f"Expected CSVs not found in {src}")
+
+#     # Copy to out_dir (optional; you can read directly from src)
+#     chain_out = out_dir / "option_chain.csv"
+#     vol_out   = out_dir / "volatility_history.csv"
+#     chain_out.write_bytes(chain_csv.read_bytes())
+#     vol_out.write_bytes(vol_csv.read_bytes())
+#     return str(chain_out), str(vol_out)
+
 def dolt_dump(repo_root: str, remote: str, out_dir: str, dolt_bin: str = "/usr/local/bin/dolt"):
     """
-    Clone (if missing) or 'dolt pull' (if present), then 'dolt dump -r csv'.
-    Outputs CSVs under out_dir (created if needed).
+    Clone (if missing) or 'dolt pull' (if present), then 'dolt dump -r csv -f'.
+    Returns paths to the dumped CSVs. No on-disk CSV merging.
     """
     repo_root = Path(repo_root)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
     env = {"PATH": f"/usr/local/bin:/usr/bin:/bin:{os.environ.get('PATH','')}"}
 
     # Clone or pull
     if not (repo_root / "options").exists():
         repo_root.mkdir(parents=True, exist_ok=True)
-        print(run_cmd(f'{dolt_bin} clone {remote} options', cwd=repo_root, env=env))
+        run_cmd(f'{dolt_bin} clone {remote} options', cwd=repo_root, env=env)
     else:
-        print(run_cmd(f'{dolt_bin} pull', cwd=repo_root / "options", env=env))
+        run_cmd(f'{dolt_bin} pull', cwd=repo_root / "options", env=env)
 
-    # Dump CSVs
-    # print(run_cmd(f'{dolt_bin} dump -r csv', cwd=repo_root / "options", env=env))
-    run_cmd(f"{dolt_bin} dump -r csv -f", cwd=repo_root / "options")
-    merge_csv(
-        new_csv=repo_root / "options" / "doltdump" / "option_chain.csv",
-        old_csv=RAW_DOLT_DIR / "option_chain.csv",
-        pk_cols=["symbol", "date"]  # or whatever keys your data uses
-    )
+    # Dump CSVs (force overwrite so the folder is fresh)
+    run_cmd(f"{dolt_bin} dump -r csv -f", cwd=repo_root / "options", env=env)
 
-
-    # Dolt writes to {repo_root}/options/doltdump/*
+    # Locate output
     src = repo_root / "options" / "doltdump"
     if not src.exists():
         raise FileNotFoundError(f"Dolt dump directory not found: {src}")
 
-    # Return absolute CSV paths we care about
     chain_csv = src / "option_chain.csv"
     vol_csv   = src / "volatility_history.csv"
     if not chain_csv.exists() or not vol_csv.exists():
         raise FileNotFoundError(f"Expected CSVs not found in {src}")
 
-    # Copy to out_dir (optional; you can read directly from src)
+    # Copy to task's out_dir so downstream tasks have a stable path
     chain_out = out_dir / "option_chain.csv"
     vol_out   = out_dir / "volatility_history.csv"
     chain_out.write_bytes(chain_csv.read_bytes())
     vol_out.write_bytes(vol_csv.read_bytes())
+
     return str(chain_out), str(vol_out)
 
 def csv_to_parquet(csv_path: str, parquet_path: str, chunksize: int = 500_000):
