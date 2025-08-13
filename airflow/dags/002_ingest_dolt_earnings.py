@@ -174,8 +174,17 @@ def _infer_fk_edges_from_pk_map(tables, cols_by_table, pk_map):
 
     return inferred_edges, peers
 
-def generate_mermaid_erd(db_path: str, out_dir: str, erd_name: str, pk_map: dict | None = None) -> str:
-    """DuckDB → Mermaid erDiagram (sanitized, with declared FKs + optional PK inference)."""
+def generate_mermaid_erd(
+    db_path: str,
+    out_dir: str,
+    erd_name: str,
+    pk_map: dict | None = None,
+    include_relationships: bool = True,
+) -> str:
+    """DuckDB → Mermaid erDiagram
+       - Sanitizes identifiers/attributes
+       - Draws declared FKs (and optional PK inference) if include_relationships=True
+    """
     os.makedirs(out_dir, exist_ok=True)
     out_mmd = os.path.join(out_dir, f"{erd_name}.mmd")
 
@@ -202,23 +211,26 @@ def generate_mermaid_erd(db_path: str, out_dir: str, erd_name: str, pk_map: dict
             WHERE tc.constraint_type = 'PRIMARY KEY'
         """).fetchall()
 
-        fks = con.execute("""
-            SELECT
-              src.table_schema AS fk_schema,
-              src.table_name   AS fk_table,
-              src.column_name  AS fk_column,
-              tgt.table_schema AS pk_schema,
-              tgt.table_name   AS pk_table,
-              tgt.column_name  AS pk_column
-            FROM information_schema.referential_constraints rc
-            JOIN information_schema.key_column_usage src
-              ON rc.constraint_name = src.constraint_name
-            JOIN information_schema.key_column_usage tgt
-              ON rc.unique_constraint_name = tgt.constraint_name
-             AND src.ordinal_position = tgt.ordinal_position
-            ORDER BY fk_schema, fk_table, src.ordinal_position
-        """).fetchall()
-
+        # Only fetch FK metadata if we might use it
+        if include_relationships:
+            fks = con.execute("""
+                SELECT
+                  src.table_schema AS fk_schema,
+                  src.table_name   AS fk_table,
+                  src.column_name  AS fk_column,
+                  tgt.table_schema AS pk_schema,
+                  tgt.table_name   AS pk_table,
+                  tgt.column_name  AS pk_column
+                FROM information_schema.referential_constraints rc
+                JOIN information_schema.key_column_usage src
+                  ON rc.constraint_name = src.constraint_name
+                JOIN information_schema.key_column_usage tgt
+                  ON rc.unique_constraint_name = tgt.constraint_name
+                 AND src.ordinal_position = tgt.ordinal_position
+                ORDER BY fk_schema, fk_table, src.ordinal_position
+            """).fetchall()
+        else:
+            fks = []
     from collections import defaultdict
     cols_by_table = defaultdict(list)
     pk_by_table   = defaultdict(set)
@@ -230,7 +242,7 @@ def generate_mermaid_erd(db_path: str, out_dir: str, erd_name: str, pk_map: dict
     lines = ["erDiagram"]
     alias_notes = []
 
-    # Entities
+    # Entities only
     for s, t in tables:
         ent = _safe_ident(f"{s}__{t}")
         lines.append(f"{ent} {{")
@@ -243,31 +255,31 @@ def generate_mermaid_erd(db_path: str, out_dir: str, erd_name: str, pk_map: dict
             lines.append(f"  {typ} {safe_c}{suffix}")
         lines.append("}")
 
-    # Declared FK relationships
-    edges_declared = set()
-    for fs, ft, fc, ps, pt, pc in fks:
-        a = _safe_ident(f"{fs}__{ft}")
-        b = _safe_ident(f"{ps}__{pt}")
-        label = f'{fc}→{pc}'.replace('"', r"\"")
-        lines.append(f'{a} }}o--|| {b} : "{label}"')
-        edges_declared.add(((fs, ft), (ps, pt)))
-
-    # Inferred edges + peer links (if provided)
-    if pk_map:
-        inferred, peers = _infer_fk_edges_from_pk_map(tables, cols_by_table, pk_map)
-        for cs, ct, child_cols, ps, pt, parent_pk_cols in inferred:
-            if ((cs, ct), (ps, pt)) in edges_declared:
-                continue
-            a = _safe_ident(f"{cs}__{ct}")
+    # Relationships (only if requested)
+    if include_relationships:
+        edges_declared = set()
+        for fs, ft, fc, ps, pt, pc in fks:
+            a = _safe_ident(f"{fs}__{ft}")
             b = _safe_ident(f"{ps}__{pt}")
-            label = ", ".join([f"{cc}→{pc}" for cc, pc in zip(child_cols, parent_pk_cols)]).replace('"', r"\"")
-            lines.append(f'{a} }}o--|| {b} : "{label} (inferred)"')
+            label = f'{fc}→{pc}'.replace('"', r"\"")
+            lines.append(f'{a} }}o--|| {b} : "{label}"')
+            edges_declared.add(((fs, ft), (ps, pt)))
 
-        for (s1, t1), (s2, t2), shared_actual in peers:
-            a = _safe_ident(f"{s1}__{t1}")
-            b = _safe_ident(f"{s2}__{t2}")
-            label = ", ".join(shared_actual).replace('"', r"\"")
-            lines.append(f'{a} }}o--o{{ {b} : "shared keys: {label}"')
+        if pk_map:
+            inferred, peers = _infer_fk_edges_from_pk_map(tables, cols_by_table, pk_map)
+            for cs, ct, child_cols, ps, pt, parent_pk_cols in inferred:
+                if ((cs, ct), (ps, pt)) in edges_declared:
+                    continue
+                a = _safe_ident(f"{cs}__{ct}")
+                b = _safe_ident(f"{ps}__{pt}")
+                label = ", ".join([f"{cc}→{pc}" for cc, pc in zip(child_cols, parent_pk_cols)]).replace('"', r"\"")
+                lines.append(f'{a} }}o--|| {b} : "{label} (inferred)"')
+
+            for (s1, t1), (s2, t2), shared_actual in peers:
+                a = _safe_ident(f"{s1}__{t1}")
+                b = _safe_ident(f"{s2}__{t2}")
+                label = ", ".join(shared_actual).replace('"', r"\"")
+                lines.append(f'{a} }}o--o{{ {b} : "shared keys: {label}"')
 
     if alias_notes:
         lines = ["%% Column alias mapping for Mermaid-safe names"] + alias_notes + [""] + lines
@@ -379,9 +391,16 @@ with DAG(
     def _make_erd(**_):
         # store under docs/erd/<repo>/<repo>.*
         erd_dir = os.path.join(PROJECT_ROOT, "docs", "erd", REPO_NAME)
-        path = generate_mermaid_erd(db_path=DB_PATH, out_dir=erd_dir, erd_name=REPO_NAME, pk_map=PK_MAP)
+        path = generate_mermaid_erd(
+            db_path=DB_PATH,
+            out_dir=erd_dir,
+            erd_name=REPO_NAME,
+            pk_map=None,                 # ignore PK inference
+            include_relationships=False  # ✅ entities only
+        )
         print(f"[ERD] Mermaid written: {path}")
         return path
+
 
     generate_mermaid_erd_task = PythonOperator(
         task_id="generate_mermaid_erd",
