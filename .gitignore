@@ -29,3 +29,5 @@ airflow_venv/
 
 notebooks/.ipynb_checkpoints/
 notebooks/etf_dca/.ipynb_checkpoints/
+
+charts/*

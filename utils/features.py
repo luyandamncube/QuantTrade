@@ -1,0 +1,145 @@
+# QuantTrade/utils/features.py
+from __future__ import annotations
+
+import duckdb
+import pandas as pd
+
+__all__ = ["add_mas_duckdb", "add_rsi_duckdb"]
+
+def _stack_for_duck(data_by_sym: dict[str, pd.DataFrame], *, required: list[str]) -> pd.DataFrame:
+    frames = []
+    for sym, df in data_by_sym.items():
+        if df.empty: 
+            continue
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise KeyError(f"{sym}: missing columns {missing}")
+        tmp = df.sort_index().reset_index()
+        tmp = tmp.rename(columns={tmp.columns[0]: "datetime"})
+        tmp["symbol"] = sym
+        frames.append(tmp)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+def add_mas_duckdb(
+    data_by_sym: dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    windows: list[int],
+    *,
+    price_col: str = "close",
+    prefix: str = "ma",
+) -> dict[str, pd.DataFrame]:
+    """
+    Add SMA columns (e.g., ma20, ma50, …) to each df using DuckDB window fns.
+    """
+    if not data_by_sym or not windows:
+        return data_by_sym
+    if any(w <= 0 for w in windows):
+        raise ValueError("All MA windows must be positive.")
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    if all_bars.empty:
+        return data_by_sym
+
+    view = "_bars_for_ma"
+    con.register(view, all_bars)
+
+    ma_cols_sql = ",\n".join(
+        [
+            f"avg({price_col}) OVER (PARTITION BY symbol ORDER BY datetime "
+            f"ROWS BETWEEN {w-1} PRECEDING AND CURRENT ROW) AS {prefix}{w}"
+            for w in windows
+        ]
+    )
+    sql = f"SELECT *, {ma_cols_sql} FROM {view} ORDER BY symbol, datetime"
+    result = con.execute(sql).df()
+    con.unregister(view)
+
+    result["datetime"] = pd.to_datetime(result["datetime"])
+    out: dict[str, pd.DataFrame] = {}
+    for sym, g in result.groupby("symbol", sort=False):
+        out[sym] = g.drop(columns=["symbol"]).set_index("datetime").sort_index()
+    return out
+
+def add_rsi_duckdb(
+    data_by_sym: dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    *,
+    period: int = 14,
+    price_col: str = "close",
+    colname: str | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Add SMA-style RSI (non-recursive) as column `rsi{period}` (or custom name).
+    Good, fast approximation; for Wilder’s exact RSI we can switch to recursive CTE.
+    """
+    if not data_by_sym:
+        return data_by_sym
+    if period <= 0:
+        raise ValueError("`period` must be positive.")
+    colname = colname or f"rsi{period}"
+
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    if all_bars.empty:
+        return data_by_sym
+
+    view = "_bars_for_rsi"
+    con.register(view, all_bars)
+
+    N = period
+    sql = f"""
+    WITH base AS (
+      SELECT
+        symbol,
+        datetime,
+        {price_col}::DOUBLE AS close,
+        LAG({price_col}) OVER (PARTITION BY symbol ORDER BY datetime) AS prev_close
+      FROM {view}
+    ),
+    deltas AS (
+      SELECT
+        symbol, datetime,
+        CASE WHEN prev_close IS NULL THEN NULL
+             WHEN close - prev_close > 0 THEN (close - prev_close) ELSE 0 END AS gain,
+        CASE WHEN prev_close IS NULL THEN NULL
+             WHEN close - prev_close < 0 THEN (prev_close - close) ELSE 0 END AS loss
+      FROM base
+    ),
+    win AS (
+      SELECT
+        symbol, datetime,
+        AVG(gain) OVER (
+          PARTITION BY symbol ORDER BY datetime
+          ROWS BETWEEN {N-1} PRECEDING AND CURRENT ROW
+        ) AS avg_gain,
+        AVG(loss) OVER (
+          PARTITION BY symbol ORDER BY datetime
+          ROWS BETWEEN {N-1} PRECEDING AND CURRENT ROW
+        ) AS avg_loss,
+        COUNT(*) FILTER (WHERE gain IS NOT NULL) OVER (
+          PARTITION BY symbol ORDER BY datetime
+          ROWS BETWEEN {N-1} PRECEDING AND CURRENT ROW
+        ) AS cnt_valid
+      FROM deltas
+    ),
+    rsi_calc AS (
+      SELECT
+        symbol, datetime,
+        CASE
+          WHEN cnt_valid < {N} THEN NULL
+          WHEN avg_loss = 0 THEN 100.0
+          ELSE 100.0 - 100.0 / (1.0 + (avg_gain / NULLIF(avg_loss, 0)))
+        END AS {colname}
+      FROM win
+    )
+    SELECT v.*, r.{colname}
+    FROM {view} AS v
+    LEFT JOIN rsi_calc AS r USING (symbol, datetime)
+    ORDER BY symbol, datetime
+    """
+    result = con.execute(sql).df()
+    con.unregister(view)
+
+    result["datetime"] = pd.to_datetime(result["datetime"])
+    out: dict[str, pd.DataFrame] = {}
+    for sym, g in result.groupby("symbol", sort=False):
+        out[sym] = g.drop(columns=["symbol"]).set_index("datetime").sort_index()
+    return out
