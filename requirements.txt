@@ -14,3 +14,4 @@ backtrader
 mermaid-py
 playwright
 psycopg2>=2.9,<3.0
+duckdb
