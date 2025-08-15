@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import duckdb
 import pandas as pd
+from typing import Dict, List
 
 __all__ = ["add_mas_duckdb", "add_rsi_duckdb", "add_emas_duckdb"]
 
@@ -144,6 +145,7 @@ def add_rsi_duckdb(
     return out
 
 def add_emas_duckdb(
+<<<<<<< HEAD
     data_by_sym: dict[str, pd.DataFrame],
     con: duckdb.DuckDBPyConnection,
     windows: list[int],
@@ -239,4 +241,61 @@ def add_emas_duckdb(
     out: dict[str, pd.DataFrame] = {}
     for sym, g in acc.groupby("symbol", sort=False):
         out[sym] = g.drop(columns=["symbol"]).set_index("datetime").sort_index()
+=======
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    windows: List[int],
+    *,
+    price_col: str = "close",
+    prefix: str = "ema",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Add EMA columns (e.g., ema20, ema50, …) to each df.
+
+    Mirrors `add_mas_duckdb`:
+      1) stack dict -> single DF
+      2) ORDER BY symbol, datetime via DuckDB
+      3) compute EMAs (vectorized pandas .ewm)
+      4) split back to dict with datetime index
+
+    Notes:
+    - DuckDB has no built-in ema() function; we compute EMA in pandas after ordering.
+    - Returns new per-symbol DataFrames with EMA columns appended.
+    """
+    if not data_by_sym or not windows:
+        return data_by_sym
+    if any(w <= 0 for w in windows):
+        raise ValueError("All EMA windows must be positive.")
+
+    # 1) Stack to a single table (reuses your helper & lowercase convention)
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    if all_bars.empty:
+        return data_by_sym
+
+    # 2) Use DuckDB to guarantee global ordering by symbol, datetime
+    view = "_bars_for_ema"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+
+    # 3) Vectorized EMA per symbol for each requested window
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+    for w in windows:
+        col = f"{prefix}{w}"
+        # groupby-transform keeps original row order and aligns output
+        ordered[col] = (
+            ordered
+            .groupby("symbol", sort=False)[price_col]
+            .transform(lambda s: s.ewm(span=w, adjust=False).mean())
+        )
+
+    # 4) Split back into dict, drop 'symbol', set datetime index, sort index
+    out: Dict[str, pd.DataFrame] = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (
+            g.drop(columns=["symbol"])
+             .set_index("datetime")
+             .sort_index()
+        )
+>>>>>>> f6b25120b9bcd57a4e43552b423cd16d664efe52
     return out
