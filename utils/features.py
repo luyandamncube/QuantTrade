@@ -5,7 +5,12 @@ import duckdb
 import pandas as pd
 from typing import Dict, List
 
-__all__ = ["add_mas_duckdb", "add_rsi_duckdb", "add_emas_duckdb"]
+__all__ = [
+    "add_mas_duckdb",
+    "add_rsi_duckdb",
+    "add_emas_duckdb",
+    "ema_crossover_signals_duckdb"
+]
 
 def _stack_for_duck(data_by_sym: dict[str, pd.DataFrame], *, required: list[str]) -> pd.DataFrame:
     frames = []
@@ -21,6 +26,21 @@ def _stack_for_duck(data_by_sym: dict[str, pd.DataFrame], *, required: list[str]
         frames.append(tmp)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+def _prep_for_duckdb(df: pd.DataFrame, order_col: str) -> tuple[pd.DataFrame, str | None, object | None]:
+    idx_name = df.index.name or order_col
+    tzinfo = df.index.tz if isinstance(df.index, pd.DatetimeIndex) else None
+    tdf = df.reset_index()
+    # standardize the order column name
+    if tdf.columns[0] != order_col:
+        tdf = tdf.rename(columns={tdf.columns[0]: order_col})
+    tdf = tdf.sort_values(order_col).reset_index(drop=True)
+    return tdf, idx_name, tzinfo
+
+def ensure_ema_cols(df: pd.DataFrame, periods: list[int], prefix="ema"):
+    missing = [p for p in periods if f"{prefix}{p}" not in df.columns]
+    if missing:
+        raise KeyError(f"Missing EMA columns: {missing}. "
+                       f"Run add_emas_duckdb(..., windows={periods}) first.")
 def add_mas_duckdb(
     data_by_sym: dict[str, pd.DataFrame],
     con: duckdb.DuckDBPyConnection,
@@ -202,3 +222,63 @@ def add_emas_duckdb(
              .sort_index()
         )
     return out
+
+def ema_crossover_signals_duckdb(
+    data_by_sym: dict,
+    con,
+    fast: int = 12,
+    slow: int = 26,
+    order_col: str = "datetime",
+    restore_index: bool = True,
+):
+    """
+    Adds signal_raw, long_cross, flat_cross in DuckDB and (optionally) restores the original datetime index.
+    Requires ema{fast} & ema{slow} columns to exist.
+    """
+    out = {}
+
+    for sym, df in data_by_sym.items():
+        # sanity: make sure EMAs exist
+        for p in (fast, slow):
+            if f"ema{p}" not in df.columns:
+                raise KeyError(f"Missing column ema{p} for {sym}. Run add_emas_duckdb(...) first.")
+
+        # expose index for SQL, remember original index name & tz
+        tdf, idx_name, tzinfo = _prep_for_duckdb(df, order_col)
+
+        con.register("t", tdf)
+        q = f"""
+        SELECT
+            t.*,
+            CASE WHEN ema{fast} > ema{slow} THEN 1 ELSE 0 END AS signal_raw,
+            CASE
+                WHEN LAG(CASE WHEN ema{fast} > ema{slow} THEN 1 ELSE 0 END)
+                     OVER (ORDER BY {order_col}) = 0
+                 AND (ema{fast} > ema{slow})
+                THEN 1 ELSE 0
+            END AS long_cross,
+            CASE
+                WHEN LAG(CASE WHEN ema{fast} > ema{slow} THEN 1 ELSE 0 END)
+                     OVER (ORDER BY {order_col}) = 1
+                 AND (ema{fast} <= ema{slow})
+                THEN 1 ELSE 0
+            END AS flat_cross
+        FROM t
+        ORDER BY {order_col}
+        """
+        res = con.execute(q).df()
+        con.unregister("t")
+
+        if restore_index:
+            # ensure datetime dtype, then restore as index and tz
+            res[order_col] = pd.to_datetime(res[order_col], utc=tzinfo is not None)
+            res = res.set_index(order_col).sort_index()
+            res.index.name = idx_name or order_col
+            if tzinfo is not None:
+                # If we parsed with utc=True above, convert to original tz
+                res.index = res.index.tz_convert(tzinfo)
+
+        out[sym] = res
+
+    return out
+
