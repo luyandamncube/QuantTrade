@@ -8,7 +8,14 @@ html, body { margin:0; padding:0; }
 }
 .btn{ padding:4px 10px; border-radius:6px; cursor:pointer; user-select:none; }
 .btn.active{ font-weight:600; }
-#chart{ height:700px; } /* JS will override */
+/* #chart{ height:700px; }  JS will override */
+
+#chart-price{ height:520px; } /* JS will override (≈70%) */
+
+#chart-rsi{   height:180px; } /* JS will override (≈30%) */
+#chart-price { margin-bottom: 6px; }
+#chart-vol   { margin-bottom: 6px; }
+
 .legend{
   position:absolute; left:12px; top:54px; padding:6px 8px;
   border-radius:8px; font:12px/1.25 -apple-system, Segoe UI, Roboto, sans-serif;

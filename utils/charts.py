@@ -15,13 +15,14 @@ def render_lightweight_chart(
     ma_windows: list[int] | None = None,
     ema_windows: list[int] | None = None,
     rsi_period: int | None = None,
-    rsi_bounds: tuple[int, int] | None = (30, 70),
+    rsi_bounds: tuple[int, int] | None = None,
     timeframes: list[str] = ("1m","5m","15m","1h","1d"),
     default_tf: str = "1m",
     digits: int = 2,
     watermark_text: str | None = None,
     watermark_opacity: float = 0.08,
-    assets_rel: str = "../static",  # relative path from out_html to static dir
+    assets_rel: str = "../static",
+    markers: list[dict] | None = None
 ) -> Path:
     """
     Write an HTML shell that loads static/lw_chart.css and static/lw_chart.js.
@@ -104,6 +105,7 @@ def render_lightweight_chart(
         "theme": theme,
         "height": height,
         "title": title,
+        "markers": markers or []
     }
 
     css_href = f"{assets_rel}/lw_chart.css"
@@ -119,12 +121,14 @@ def render_lightweight_chart(
   <script src="{js_src}"></script>
 </head>
 <body>
-  <div id="wrap">
-    <div id="toolbar"></div>
-    <div id="chart"></div>
-    <div id="legend" class="legend"></div>
-    <div id="wm" class="watermark" style="display:none;"></div>
-  </div>
+<div id="wrap">
+  <div id="toolbar"></div>
+  <div id="chart-price"></div>
+  <div id="chart-vol"></div>     <!-- NEW: volume pane -->
+  <div id="chart-rsi"></div>
+  <div id="legend" class="legend"></div>
+  <div id="wm" class="watermark" style="display:none;"></div>
+</div>
   <script>
     window.__LW_CHART_CONFIG__ = {json.dumps(config)};
     initLightweightChart(window.__LW_CHART_CONFIG__);

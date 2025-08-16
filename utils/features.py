@@ -165,103 +165,6 @@ def add_rsi_duckdb(
     return out
 
 def add_emas_duckdb(
-<<<<<<< HEAD
-    data_by_sym: dict[str, pd.DataFrame],
-    con: duckdb.DuckDBPyConnection,
-    windows: list[int],
-    *,
-    price_col: str = "close",
-    prefix: str = "ema",
-    max_recursion_depth: int | None = 200_000,  # bump if your series are huge
-) -> dict[str, pd.DataFrame]:
-    """
-    Add EMA columns (e.g., ema12, ema26, ema200) using a recursive CTE per window.
-
-    EMA(w) definition:
-      alpha = 2/(w+1)
-      seed at row w = SMA(first w closes)
-      then ema[i] = alpha*close[i] + (1-alpha)*ema[i-1]
-    """
-    if not data_by_sym or not windows:
-        return data_by_sym
-    if any(w < 2 for w in windows):
-        raise ValueError("EMA windows must be >= 2.")
-
-    # Optionally raise recursion cap (DuckDB default can be low for long series)
-    if max_recursion_depth is not None:
-        con.execute(f"SET max_recursion_depth = {int(max_recursion_depth)}")
-
-    # ---- stack all symbols for one pass through DuckDB ----
-    frames = []
-    for sym, df in data_by_sym.items():
-        if df.empty:
-            continue
-        if price_col not in df.columns:
-            raise KeyError(f"{sym}: missing column '{price_col}'")
-        tmp = df.sort_index().reset_index()
-        tmp = tmp.rename(columns={tmp.columns[0]: "datetime"})
-        tmp["symbol"] = sym
-        frames.append(tmp)
-    if not frames:
-        return data_by_sym
-    all_bars = pd.concat(frames, ignore_index=True)
-
-    view = "_bars_for_ema"
-    con.register(view, all_bars[["symbol", "datetime", price_col]])
-
-    # Accumulator that will pick up each EMA column
-    acc = all_bars.copy()
-
-    for w in sorted(set(windows)):
-        alpha = 2.0 / (w + 1.0)
-        sql = f"""
-        WITH base AS (
-          SELECT
-            symbol,
-            datetime,
-            {price_col}::DOUBLE AS close,
-            ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime) AS rn
-          FROM {view}
-        ),
-        seed AS (
-          SELECT
-            symbol, rn, datetime, close,
-            AVG(close) OVER (
-              PARTITION BY symbol ORDER BY rn
-              ROWS BETWEEN {w-1} PRECEDING AND CURRENT ROW
-            ) AS sma_w
-          FROM base
-        ),
-        start AS (
-          -- start at rn = {w} with SMA as the EMA seed
-          SELECT symbol, rn, datetime, close, sma_w AS ema
-          FROM seed
-          WHERE rn = {w}
-        ),
-        RECURSIVE rec AS (
-          SELECT * FROM start
-          UNION ALL
-          SELECT b.symbol, b.rn, b.datetime, b.close,
-                 {alpha} * b.close + (1 - {alpha}) * rec.ema AS ema
-          FROM base b
-          JOIN rec
-            ON b.symbol = rec.symbol AND b.rn = rec.rn + 1
-        )
-        SELECT symbol, datetime, ema AS {prefix}{w}
-        FROM rec
-        ORDER BY symbol, datetime
-        """
-        dfw = con.execute(sql).df()
-        acc = acc.merge(dfw, on=["symbol", "datetime"], how="left")
-
-    con.unregister(view)
-
-    # ---- split back to {symbol: DataFrame} ----
-    acc["datetime"] = pd.to_datetime(acc["datetime"])
-    out: dict[str, pd.DataFrame] = {}
-    for sym, g in acc.groupby("symbol", sort=False):
-        out[sym] = g.drop(columns=["symbol"]).set_index("datetime").sort_index()
-=======
     data_by_sym: Dict[str, pd.DataFrame],
     con: duckdb.DuckDBPyConnection,
     windows: List[int],
@@ -317,7 +220,6 @@ def add_emas_duckdb(
              .set_index("datetime")
              .sort_index()
         )
->>>>>>> f6b25120b9bcd57a4e43552b423cd16d664efe52
     return out
 
 def ema_crossover_signals_duckdb(
