@@ -4,7 +4,12 @@ function initLightweightChart(config){
     candles, volumes, ma_windows, ema_windows, ma_colors, ema_colors,
     rsi_period, rsi_bounds, timeframes, default_tf, digits,
     symbol, watermark_text, watermark_opacity, theme, height, title,
-    markers = []
+    markers = [],
+    // precomputed series
+    ma_series = {},            // { name -> [{time,value}] }
+    ema_series = {},           // { name -> [{time,value}] }
+    rsi_series = [],           // [{time,value}]
+    macd: macdCfg = { enabled:false } // { enabled, series:{macd,signal,hist}, colors? }
   } = config;
 
   // ---- theming ----
@@ -20,17 +25,30 @@ function initLightweightChart(config){
 
   const priceEl = document.getElementById('chart-price');
   const volEl   = document.getElementById('chart-vol');
+  const macdEl  = document.getElementById('chart-macd');
   const rsiEl   = document.getElementById('chart-rsi');
 
   if (!priceEl || !volEl || !rsiEl){
     console.error('Missing containers. Need #chart-price, #chart-vol, #chart-rsi.');
     return;
   }
+  if (macdCfg.enabled && !macdEl){
+    console.error('MACD enabled but missing container #chart-macd.');
+    return;
+  }
 
   const totalH = Math.max(420, (height || 700));
-  priceEl.style.height = `${totalH - 120 - 160}px`;  // price gets the rest
-  volEl.style.height   = `120px`;
-  rsiEl.style.height   = `160px`;
+  const rsiH   = 160;
+  const volH   = 120;
+  const macdH  = macdCfg.enabled ? 140 : 0;
+
+  priceEl.style.height = `${totalH - volH - rsiH - macdH}px`;
+  volEl.style.height   = `${volH}px`;
+  if (macdEl){
+    macdEl.style.height = macdCfg.enabled ? `${macdH}px` : '0px';
+    macdEl.style.display = macdCfg.enabled ? '' : 'none';
+  }
+  rsiEl.style.height   = `${rsiH}px`;
 
   if (toolbarEl){
     toolbarEl.style.background = isDark ? 'rgba(14,17,23,0.65)' : 'rgba(255,255,255,0.9)';
@@ -46,10 +64,10 @@ function initLightweightChart(config){
     wmEl.style.mixBlendMode = isDark ? 'screen' : 'multiply';
   }
 
-  // ---- helpers ----
+  // ---- helpers (no indicator math here) ----
   function tfToMinutes(tf){ const m=String(tf).toLowerCase();
-    if (m.endsWith('m')) return parseInt(m);
-    if (m.endsWith('h')) return parseInt(m)*60;
+    if (m.endsWith('m')) return parseInt(m, 10);
+    if (m.endsWith('h')) return parseInt(m, 10)*60;
     if (m.endsWith('d')) return 'day';
     return 1;
   }
@@ -95,41 +113,28 @@ function initLightweightChart(config){
     }
     return out;
   }
-  function computeSMA(c, w){
-    const out=[]; let sum=0;
-    for (let i=0;i<c.length;i++){
-      sum += c[i].close;
-      if (i >= w) sum -= c[i-w].close;
-      out.push({ time:c[i].time, value: (i>=w-1) ? sum/w : null });
+  function aggregateLineSeries(series, tf){
+    if (!series || !series.length) return [];
+    const map=new Map();
+    for (const pt of series){
+      const ts = bucketTimeSec(pt.time, tf);
+      map.set(ts, { time: ts, value: pt.value }); // keep last in bucket
     }
-    return out;
+    return Array.from(map.values()).sort((a,b)=>a.time-b.time);
   }
-  function computeEMA(c, w){
-    const out=[]; if (w<=1){ for (const x of c) out.push({time:x.time,value:x.close}); return out; }
-    let sum=0;
-    for (let i=0;i<c.length;i++){
-      const close=c[i].close;
-      if (i < w){ sum+=close; out.push({time:c[i].time,value:null});
-        if (i===w-1){ const sma=sum/w; out[i]={time:c[i].time,value:sma};
-          let prev=sma, a=2/(w+1);
-          for (let j=i+1;j<c.length;j++){ const ema=a*c[j].close+(1-a)*prev; out.push({time:c[j].time,value:ema}); prev=ema; }
-          return out;
-        }
-      }
+  function aggregateHistSeries(series, tf){
+    if (!series || !series.length) return [];
+    const map=new Map();
+    for (const pt of series){
+      const ts = bucketTimeSec(pt.time, tf);
+      const rec = map.get(ts) || { time: ts, sum:0, count:0 };
+      rec.sum += (pt.value ?? 0);
+      rec.count += 1;
+      map.set(ts, rec);
     }
-    return out;
-  }
-  function computeRSI(c,p){
-    if (!p) return [];
-    const out=[]; let g=0,l=0;
-    for (let i=0;i<c.length;i++){
-      if (i===0){ out.push({time:c[i].time,value:null}); continue; }
-      const ch=c[i].close-c[i-1].close, gn=Math.max(ch,0), ln=Math.max(-ch,0);
-      if (i<=p){ g+=gn; l+=ln; out.push({time:c[i].time,value:(i===p?100-100/(1+(g/p)/(l/p||1e-12)):null)}); }
-      else { const chOld=c[i-p].close-c[i-p-1].close, gOld=Math.max(chOld,0), lOld=Math.max(-chOld,0);
-        g+=gn-gOld; l+=ln-lOld; const rs=(g/p)/(l/p||1e-12); out.push({time:c[i].time,value:100-100/(1+rs)}); }
-    }
-    return out;
+    const arr = Array.from(map.values()).map(r => ({ time:r.time, value: r.count ? r.sum/r.count : null }));
+    arr.sort((a,b)=>a.time-b.time);
+    return arr;
   }
   function lastNonNull(arr){
     for (let i=arr.length-1;i>=0;i--){ const v=arr[i]?.value; if (v!=null && !Number.isNaN(v)) return {time:arr[i].time,value:v}; }
@@ -171,8 +176,16 @@ function initLightweightChart(config){
     timeScale:{ timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:6 },
     rightPriceScale:{ borderVisible:false }
   });
+  const chartMACD = (macdCfg.enabled && macdEl)
+    ? LightweightCharts.createChart(macdEl, {
+        layout:{ background:{type:'solid',color:bg}, textColor:text },
+        grid:{ vertLines:{color:grid}, horzLines:{color:grid} },
+        timeScale:{ timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:6 },
+        rightPriceScale:{ borderVisible:false }
+      })
+    : null;
 
-  // series
+  // base series
   const candleSeries = chartPrice.addCandlestickSeries({
     upColor:'#26a69a', downColor:'#ef5350',
     borderUpColor:'#26a69a', borderDownColor:'#ef5350',
@@ -182,25 +195,82 @@ function initLightweightChart(config){
     priceFormat:{ type:'volume' }, priceLineVisible:false, base:0
   });
 
-  const maSeries = {};
-  for (const w of (ma_windows || [])){
-    const name='ma'+w;
-    maSeries[name] = chartPrice.addLineSeries({ color:(ma_colors && ma_colors[name])||'#888', lineWidth:2, priceLineVisible:false });
+  // MA / EMA line series
+  const maSeriesLines = {};
+  for (const name of Object.keys(ma_series || {})){
+    maSeriesLines[name] = chartPrice.addLineSeries({
+      color:(ma_colors && ma_colors[name]) || '#888', lineWidth:2, priceLineVisible:false
+    });
   }
-  const emaSeries = {};
-  for (const w of (ema_windows || [])){
-    const name='ema'+w;
-    emaSeries[name] = chartPrice.addLineSeries({ color:(ema_colors && ema_colors[name])||'#aaa', lineWidth:2, priceLineVisible:false });
+  const emaSeriesLines = {};
+  for (const name of Object.keys(ema_series || {})){
+    emaSeriesLines[name] = chartPrice.addLineSeries({
+      color:(ema_colors && ema_colors[name]) || '#aaa', lineWidth:2, priceLineVisible:false
+    });
   }
   let maPriceLines={}, emaPriceLines={}, lastPriceLine=null;
 
-  let rsiSeries=null;
-  if (rsi_period && Number.isFinite(+rsi_period)){
-    rsiSeries = chartRSI.addLineSeries({ lineWidth:2, color:'#ffd54f', priceLineVisible:false });
+  // RSI (precomputed)
+  let rsiSeriesLine=null, currentRSI=[];
+  if (Array.isArray(rsi_series) && rsi_series.length){
+    rsiSeriesLine = chartRSI.addLineSeries({ lineWidth:2, color:'#ffd54f', priceLineVisible:false });
     if (Array.isArray(rsi_bounds) && rsi_bounds.length===2
         && Number.isFinite(+rsi_bounds[0]) && Number.isFinite(+rsi_bounds[1])){
-      rsiSeries.createPriceLine({ price:+rsi_bounds[1], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:'70' });
-      rsiSeries.createPriceLine({ price:+rsi_bounds[0], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:'30' });
+      rsiSeriesLine.createPriceLine({ price:+rsi_bounds[1], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsi_bounds[1]) });
+      rsiSeriesLine.createPriceLine({ price:+rsi_bounds[0], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsi_bounds[0]) });
+    }
+  }
+
+  // MACD (precomputed)
+  const macdColors = {
+    macd: (macdCfg.colors && macdCfg.colors.macd) || '#26c6da',
+    signal: (macdCfg.colors && macdCfg.colors.signal) || '#ffa726',
+    hist_pos: (macdCfg.colors && macdCfg.colors.hist_pos) || '#66bb6a',
+    hist_neg: (macdCfg.colors && macdCfg.colors.hist_neg) || '#ef5350',
+  };
+  let macdLineSeries=null, macdSignalSeries=null, macdHistSeries=null;
+  let currentMACD=[], currentMACDSignal=[], currentMACDHist=[];
+  if (chartMACD){
+    macdLineSeries   = chartMACD.addLineSeries({ title:'MACD',   color: macdColors.macd, lineWidth:2, priceLineVisible:false });
+    macdSignalSeries = chartMACD.addLineSeries({ title:'Signal', color: macdColors.signal, lineWidth:2, priceLineVisible:false });
+    macdHistSeries   = chartMACD.addHistogramSeries({ priceFormat: { type:'price', precision:5, minMove:0.00001 }, priceLineVisible:false, base:0 });
+  }
+
+  // ---- dynamic indicator labels (follow crosshair / last visible) ----
+  let currentCandles=[], currentVolumes=[];
+  let currentMAs = {}, currentEMAs = {};
+
+  function ensurePriceLine(dict, seriesLine, name, color){
+    if (dict[name]) return dict[name];
+    dict[name] = seriesLine.createPriceLine({
+      price: 0,
+      color,
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true,
+      title: name,
+    });
+    return dict[name];
+  }
+
+  function updateIndicatorPriceLines(ts){
+    // MA labels
+    for (const name of Object.keys(maSeriesLines)){
+      const data = currentMAs[name] || [];
+      const pt = valueAtTime(data, ts) || lastNonNull(data);
+      if (!pt || pt.value == null) continue;
+      const color = (ma_colors && ma_colors[name]) || '#888';
+      const pl = ensurePriceLine(maPriceLines, maSeriesLines[name], name, color);
+      pl.applyOptions({ price: pt.value, color, title: `${name} ${fmt(pt.value)}` });
+    }
+    // EMA labels
+    for (const name of Object.keys(emaSeriesLines)){
+      const data = currentEMAs[name] || [];
+      const pt = valueAtTime(data, ts) || lastNonNull(data);
+      if (!pt || pt.value == null) continue;
+      const color = (ema_colors && ema_colors[name]) || '#aaa';
+      const pl = ensurePriceLine(emaPriceLines, emaSeriesLines[name], name, color);
+      pl.applyOptions({ price: pt.value, color, title: `${name} ${fmt(pt.value)}` });
     }
   }
 
@@ -212,25 +282,33 @@ function initLightweightChart(config){
     let html = `<span class="row sym">${symbol}</span><span class="row">${new Date(c.time*1000).toISOString().replace('T',' ').slice(0,19)} UTC</span>`;
     html += `<span class="row">O:${fmt(c.open)} H:${fmt(c.high)} L:${fmt(c.low)} C:${fmt(c.close)}</span>`;
     if (v && v.value!=null) html += `<span class="row">Vol:${fmtVol(v.value)}</span>`;
-    for (const [name, series] of Object.entries(maSeries)){
-      // we can't read series data directly; show last label only
-      const last = maPriceLines[name] ? maPriceLines[name].options().price : null;
-      html += `<span class="row"><span class="dot" style="background:${(ma_colors && ma_colors[name])||'#888'}"></span>${name}: ${fmt(last)}</span>`;
+
+    for (const name of Object.keys(maSeriesLines)){
+      const last = lastNonNull(currentMAs[name] || []);
+      html += `<span class="row"><span class="dot" style="background:${(ma_colors && ma_colors[name])||'#888'}"></span>${name}: ${fmt(last?.value)}</span>`;
     }
-    for (const [name, series] of Object.entries(emaSeries)){
-      const last = emaPriceLines[name] ? emaPriceLines[name].options().price : null;
-      html += `<span class="row"><span class="dot" style="background:${(ema_colors && ema_colors[name])||'#aaa'}"></span>${name}: ${fmt(last)}</span>`;
+    for (const name of Object.keys(emaSeriesLines)){
+      const last = lastNonNull(currentEMAs[name] || []);
+      html += `<span class="row"><span class="dot" style="background:${(ema_colors && ema_colors[name])||'#aaa'}"></span>${name}: ${fmt(last?.value)}</span>`;
     }
-    if (rsiSeries && currentRSI.length){
+    if (rsiSeriesLine && currentRSI.length){
       const r = valueAtTime(currentRSI, c.time);
-      html += `<span class="row">RSI(${rsi_period}): ${fmt(r ? r.value : null)}</span>`;
+      const label = rsi_period ? `RSI(${rsi_period})` : 'RSI';
+      html += `<span class="row">${label}: ${fmt(r ? r.value : null)}</span>`;
+    }
+    if (chartMACD){
+      const m = valueAtTime(currentMACD, c.time);
+      const s = valueAtTime(currentMACDSignal, c.time);
+      const h = valueAtTime(currentMACDHist, c.time);
+      html += `<span class="row">MACD: ${fmt(m?.value)} Sig: ${fmt(s?.value)} Hist: ${fmt(h?.value)}</span>`;
     }
     legendEl.innerHTML = html;
   }
 
   function setWatermarkText(tf){
-    if (!wmEl || !watermark_text) return;
-    wmEl.textContent = watermark_text.replace('{tf}', tf);
+    const wmText = watermark_text;
+    if (!wmEl || !wmText) return;
+    wmEl.textContent = wmText.replace('{tf}', tf);
     wmEl.style.display = '';
   }
 
@@ -248,9 +326,8 @@ function initLightweightChart(config){
     }
   }
 
-  // ---- state + TF switch ----
+  // ---- TF switch (only aggregation & paint) ----
   let currentTF = default_tf || '1d';
-  let currentCandles=[], currentVolumes=[], currentRSI=[];
 
   function setTimeframe(tf){
     currentTF = tf;
@@ -267,32 +344,42 @@ function initLightweightChart(config){
     for (const [,pl] of Object.entries(emaPriceLines)) pl.remove();
     maPriceLines={}; emaPriceLines={};
 
-    for (const w of (ma_windows || [])){
-      const name='ma'+w, data=computeSMA(currentCandles, w);
-      maSeries[name].setData(data);
-      const last=lastNonNull(data); if (last){
-        maPriceLines[name]=maSeries[name].createPriceLine({
-          price:last.value, color:(ma_colors && ma_colors[name])||'#888',
-          lineWidth:1, lineStyle:LightweightCharts.LineStyle.Solid, axisLabelVisible:true,
-          title:`${name} ${last.value.toFixed(digits||2)}`
-        });
-      }
+    // Paint precomputed MA/EMA series
+    currentMAs = {};
+    for (const name of Object.keys(maSeriesLines)){
+      const data = aggregateLineSeries(ma_series[name] || [], tf);
+      currentMAs[name] = data;
+      maSeriesLines[name].setData(data);
     }
-    for (const w of (ema_windows || [])){
-      const name='ema'+w, data=computeEMA(currentCandles, w);
-      emaSeries[name].setData(data);
-      const last=lastNonNull(data); if (last){
-        emaPriceLines[name]=emaSeries[name].createPriceLine({
-          price:last.value, color:(ema_colors && ema_colors[name])||'#aaa',
-          lineWidth:1, lineStyle:LightweightCharts.LineStyle.Solid, axisLabelVisible:true,
-          title:`${name} ${last.value.toFixed(digits||2)}`
-        });
-      }
+    currentEMAs = {};
+    for (const name of Object.keys(emaSeriesLines)){
+      const data = aggregateLineSeries(ema_series[name] || [], tf);
+      currentEMAs[name] = data;
+      emaSeriesLines[name].setData(data);
     }
 
-    if (rsiSeries){
-      currentRSI = computeRSI(currentCandles, +rsi_period);
-      rsiSeries.setData(currentRSI);
+    // RSI
+    if (rsiSeriesLine){
+      currentRSI = aggregateLineSeries(rsi_series || [], tf);
+      rsiSeriesLine.setData(currentRSI);
+    }
+
+    // MACD
+    if (chartMACD && macdCfg && macdCfg.series){
+      const macdA = aggregateLineSeries(macdCfg.series.macd || [], tf);
+      const sigA  = aggregateLineSeries(macdCfg.series.signal || [], tf);
+      const histA = aggregateHistSeries(macdCfg.series.hist || [], tf);
+      currentMACD = macdA;
+      currentMACDSignal = sigA;
+      currentMACDHist = histA;
+
+      macdLineSeries.setData(macdA);
+      macdSignalSeries.setData(sigA);
+      macdHistSeries.setData(histA.map(pt => ({
+        time: pt.time,
+        value: pt.value,
+        color: (pt.value >= 0 ? macdColors.hist_pos : macdColors.hist_neg)
+      })));
     }
 
     if (currentCandles.length){
@@ -302,6 +389,8 @@ function initLightweightChart(config){
         lineStyle:LightweightCharts.LineStyle.Dotted, axisLabelVisible:true,
         title:`C ${lastC.close.toFixed(digits||2)}`
       });
+      // make indicator labels match the last bar initially
+      updateIndicatorPriceLines(lastC.time);
     }
 
     // button state + watermark
@@ -320,10 +409,15 @@ function initLightweightChart(config){
     if (rangeNow){
       chartVol.timeScale().setVisibleRange(rangeNow);
       chartRSI.timeScale().setVisibleRange(rangeNow);
+      if (chartMACD) chartMACD.timeScale().setVisibleRange(rangeNow);
     } else {
       requestAnimationFrame(() => {
         const r = chartPrice.timeScale().getVisibleRange();
-        if (r){ chartVol.timeScale().setVisibleRange(r); chartRSI.timeScale().setVisibleRange(r); }
+        if (r){
+          chartVol.timeScale().setVisibleRange(r);
+          chartRSI.timeScale().setVisibleRange(r);
+          if (chartMACD) chartMACD.timeScale().setVisibleRange(r);
+        }
       });
     }
 
@@ -332,26 +426,32 @@ function initLightweightChart(config){
     }
   }
 
-  // sync ranges across all three (after first paint)
+  // sync ranges across panes + keep labels updated
   let syncing = false;
-  function sync(from, others){
+  function onRangeSyncFrom(from, others){
     if (syncing) return;
     const r = from.timeScale().getVisibleRange();
     if (!r) return;
     syncing = true;
     for (const ch of others) ch.timeScale().setVisibleRange(r);
     syncing = false;
+    // after syncing, use the last visible candle time to refresh labels
+    const t = currentCandles.at(-1)?.time;
+    if (t != null) updateIndicatorPriceLines(t);
   }
 
   function wireSync(){
-    chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => sync(chartPrice, [chartVol, chartRSI]));
-    chartVol.timeScale().subscribeVisibleTimeRangeChange(() => sync(chartVol, [chartPrice, chartRSI]));
-    chartRSI.timeScale().subscribeVisibleTimeRangeChange(() => sync(chartRSI, [chartPrice, chartVol]));
-
-    // legend on price crosshair; use time to lookup volume/RSI
+    const group = [chartPrice, chartVol, chartRSI].concat(chartMACD ? [chartMACD] : []);
+    for (const a of group){
+      const others = group.filter(x => x!==a);
+      a.timeScale().subscribeVisibleTimeRangeChange(() => onRangeSyncFrom(a, others));
+    }
     chartPrice.subscribeCrosshairMove((param) => {
       const t = param?.time ?? (currentCandles.at(-1)?.time);
-      if (t != null) updateLegend(t);
+      if (t != null) {
+        updateLegend(t);
+        updateIndicatorPriceLines(t);
+      }
     });
   }
 
@@ -368,6 +468,7 @@ function initLightweightChart(config){
     chartPrice.applyOptions({ width: w });
     chartVol.applyOptions({ width: w });
     chartRSI.applyOptions({ width: w });
+    if (chartMACD) chartMACD.applyOptions({ width: w });
   });
   ro.observe(document.getElementById('wrap'));
 }

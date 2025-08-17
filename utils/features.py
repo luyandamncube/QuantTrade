@@ -8,6 +8,7 @@ __all__ = [
     "add_mas_duckdb",
     "add_rsi_duckdb",
     "add_emas_duckdb",
+    "add_macd_duckdb",
     "ema_crossover_signals_duckdb"
 ]
 
@@ -279,5 +280,78 @@ def ema_crossover_signals_duckdb(
 
         out[sym] = res
 
+    return out
+
+def add_macd_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    *,
+    price_col: str = "close",
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+    prefix: str = "macd",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Add MACD columns to each per-symbol DataFrame in `data_by_sym`.
+
+    Columns added:
+      - f"{prefix}"          : MACD line (EMA(fast) - EMA(slow))
+      - f"{prefix}_signal"   : Signal line (EMA of MACD line, span=signal)
+      - f"{prefix}_hist"     : Histogram (MACD - Signal)
+
+    Approach mirrors `add_emas_duckdb`:
+      1) Stack dict -> single DF (expects columns: symbol, datetime, <price_col>)
+      2) Use DuckDB to ORDER BY symbol, datetime (canonical ordering)
+      3) Compute EMAs via pandas groupby-transform (DuckDB has no EMA)
+      4) Split back into dict with datetime index sorted ascending
+
+    Notes:
+    - Requires an existing `_stack_for_duck(data_by_sym, required=[price_col])`
+      that returns columns ['symbol','datetime',..., price_col] with lowercase names.
+    - All input DataFrames should have lowercase column names and a DatetimeIndex
+      (or at least a 'datetime' column the stacker creates).
+    """
+    if not data_by_sym:
+        return data_by_sym
+    if fast <= 0 or slow <= 0 or signal <= 0:
+        raise ValueError("MACD parameters must be positive integers.")
+    if slow <= fast:
+        raise ValueError("`slow` must be greater than `fast`.")
+    # 1) Stack to a single table
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    if all_bars.empty:
+        return data_by_sym
+
+    # 2) Enforce global ordering via DuckDB
+    view = "_bars_for_macd"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+
+    # 3) Compute EMAs and MACD per symbol
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+    g = ordered.groupby("symbol", sort=False)
+
+    fast_ema = g[price_col].transform(lambda s: s.ewm(span=fast, adjust=False).mean())
+    slow_ema = g[price_col].transform(lambda s: s.ewm(span=slow, adjust=False).mean())
+    macd_line = fast_ema - slow_ema
+    macd_signal = macd_line.groupby(ordered["symbol"], sort=False).transform(
+        lambda s: s.ewm(span=signal, adjust=False).mean()
+    )
+    macd_hist = macd_line - macd_signal
+
+    ordered[f"{prefix}"] = macd_line
+    ordered[f"{prefix}_signal"] = macd_signal
+    ordered[f"{prefix}_hist"] = macd_hist
+
+    # 4) Split back to dict, index by datetime
+    out: Dict[str, pd.DataFrame] = {}
+    for sym, gdf in ordered.groupby("symbol", sort=False):
+        out[sym] = (
+            gdf.drop(columns=["symbol"])
+               .set_index("datetime")
+               .sort_index()
+        )
     return out
 
