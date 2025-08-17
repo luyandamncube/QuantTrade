@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import duckdb
 import pandas as pd
+import numpy as np
 from typing import Dict, List
+import backtrader as bt
+import math
 
 __all__ = [
     "add_mas_duckdb",
     "add_rsi_duckdb",
     "add_emas_duckdb",
     "add_macd_duckdb",
-    "ema_crossover_signals_duckdb"
+    "ema_crossover_signals_duckdb",
+    # "add_atr_duckdb",
+    # "add_keltner_duckdb",
+    # "add_hhll_duckdb",
+    # "add_atr_trailing_stops_duckdb",
+    # "add_choppiness_duckdb",
+    # "add_bollinger_bw_duckdb",
+    "add_atr_feature_pack_duckdb"
 ]
 
 def _stack_for_duck(data_by_sym: dict[str, pd.DataFrame], *, required: list[str]) -> pd.DataFrame:
@@ -355,3 +365,392 @@ def add_macd_duckdb(
         )
     return out
 
+def add_atr_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    n: int = 14,
+    *,
+    price_cols: Tuple[str,str,str] = ("high","low","close"),
+    wilder: bool = True,          # Wilder ATR via EWM(alpha=1/n)
+    add_tr: bool = True,
+    add_natr: bool = True,
+    prefix: str = "atr",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds TR (optional), ATR (atr{n}) and NATR (natr{n}) per symbol.
+    Requires columns: high, low, close.
+    """
+    if not data_by_sym:
+        return data_by_sym
+    h,l,c = price_cols
+    all_bars = _stack_for_duck(data_by_sym, required=[h,l,c])
+    if all_bars.empty:
+        return data_by_sym
+
+    view = "_bars_for_atr"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+    def _true_range(g: pd.DataFrame) -> pd.Series:
+        pc = g[c].shift(1)
+        tr = pd.concat([(g[h]-g[l]).abs(),
+                        (g[h]-pc).abs(),
+                        (g[l]-pc).abs()], axis=1).max(axis=1)
+        return tr
+
+    # compute TR and ATR per symbol
+    if add_tr:
+        # ordered["tr"] = (
+        #     ordered.groupby("symbol", sort=False)
+        #         .apply(_true_range, include_groups=False)
+        # )
+        ordered["tr"] = (
+            ordered.groupby("symbol", sort=False, group_keys=False)
+                .apply(_true_range)
+        )
+
+    else:
+        tr = ordered.groupby("symbol", sort=False, group_keys=False).apply(_true_range)
+        ordered["_tr_tmp"] = tr  # ephemeral
+
+    tr_col = "tr" if add_tr else "_tr_tmp"
+
+    if wilder:
+        ordered[f"{prefix}{n}"] = (
+            ordered.groupby("symbol", sort=False)[tr_col]
+                   .transform(lambda s: s.ewm(alpha=1.0/n, adjust=False, min_periods=n).mean())
+        )
+    else:
+        ordered[f"{prefix}{n}"] = (
+            ordered.groupby("symbol", sort=False)[tr_col]
+                   .transform(lambda s: s.rolling(n, min_periods=n).mean())
+        )
+
+    if add_natr:
+        ordered[f"n{prefix}{n}"] = ordered[f"{prefix}{n}"] / ordered[c]  # e.g., natr14
+
+    if not add_tr:
+        ordered.drop(columns=["_tr_tmp"], inplace=True, errors="ignore")
+
+    out: Dict[str, pd.DataFrame] = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+def add_keltner_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    *,
+    n_basis: int = 20,
+    n_atr: int = 20,
+    k: float = 2.0,
+    basis: str = "ema",           # "ema" or "sma"
+    price_col: str = "close",
+    atr_prefix: str = "atr",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds kc{n_basis}_basis, kc{n_basis}_u, kc{n_basis}_l using ATR(n_atr).
+    Computes basis internally (EMA/SMA) per symbol.
+    """
+    if not data_by_sym:
+        return data_by_sym
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    view = "_bars_for_kc"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    # Ensure ATR(n_atr) exists; compute on the fly if missing
+    need_atr = f"{atr_prefix}{n_atr}"
+    if need_atr not in ordered.columns:
+        # inject high/low/close if available from source dict; _stack_for_duck usually includes all cols
+        out_tmp = add_atr_duckdb({k:v for k,v in data_by_sym.items()}, con, n=n_atr, add_tr=False, add_natr=False, prefix=atr_prefix)
+        # restack to ordered again to align (simplest path to keep pattern consistent)
+        all_bars = _stack_for_duck(out_tmp, required=[price_col, need_atr])
+        con.register(view, all_bars)
+        ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+        con.unregister(view)
+        ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    # compute basis
+    if basis == "ema":
+        basis_ser = (ordered.groupby("symbol", sort=False)[price_col]
+                             .transform(lambda s: s.ewm(span=n_basis, adjust=False, min_periods=n_basis).mean()))
+    else:
+        basis_ser = (ordered.groupby("symbol", sort=False)[price_col]
+                             .transform(lambda s: s.rolling(n_basis, min_periods=n_basis).mean()))
+
+    kc_b_name = f"kc{n_basis}_basis"
+    ordered[kc_b_name] = basis_ser
+    ordered[f"kc{n_basis}_u"] = ordered[kc_b_name] + k * ordered[need_atr]
+    ordered[f"kc{n_basis}_l"] = ordered[kc_b_name] - k * ordered[need_atr]
+
+    out: Dict[str, pd.DataFrame] = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+def add_hhll_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    window: int = 20,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds hh_{window} (rolling max high) and ll_{window} (rolling min low).
+    """
+    all_bars = _stack_for_duck(data_by_sym, required=["high","low"])
+    view = "_bars_for_hhll"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    ordered[f"hh_{window}"] = (ordered.groupby("symbol", sort=False)["high"]
+                                      .transform(lambda s: s.rolling(window, min_periods=window).max()))
+    ordered[f"ll_{window}"] = (ordered.groupby("symbol", sort=False)["low"]
+                                      .transform(lambda s: s.rolling(window, min_periods=window).min()))
+
+    out = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+def add_atr_trailing_stops_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    *,
+    atr_col: str = "atr14",
+    m_atr: float = 3.0,
+    price_col: str = "close",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds ratcheting stops:
+      atr_stop_long_{m} = cummax(close - m*ATR)
+      atr_stop_short_{m} = cummin(close + m*ATR)
+    per symbol, respecting chronological order.
+    """
+    needed = [price_col, atr_col]
+    all_bars = _stack_for_duck(data_by_sym, required=needed)
+    view = "_bars_for_atrstops"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    base_long = ordered[price_col] - m_atr * ordered[atr_col]
+    base_short = ordered[price_col] + m_atr * ordered[atr_col]
+
+    # group-wise ratchets
+    ordered[f"atr_stop_long_{m_atr:g}"] = (
+        ordered.assign(_b=base_long)
+               .groupby("symbol", sort=False)["_b"].cummax()
+    )
+    ordered[f"atr_stop_short_{m_atr:g}"] = (
+        ordered.assign(_b=base_short)
+               .groupby("symbol", sort=False)["_b"].cummin()
+    )
+    ordered.drop(columns=["_b"], inplace=True, errors="ignore")
+
+    out = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+def add_choppiness_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    n: int = 14,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds chop{n}. Computes TR internally if missing (not persisted).
+    """
+    all_bars = _stack_for_duck(data_by_sym, required=["high","low","close"])
+    view = "_bars_for_chop"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    # TR (temp)
+    pc = ordered["close"].shift(1)
+    tr = pd.concat([(ordered["high"]-ordered["low"]).abs(),
+                    (ordered["high"]-pc).abs(),
+                    (ordered["low"]-pc).abs()], axis=1).max(axis=1)
+
+    tr_sum = (ordered.assign(_tr=tr)
+                      .groupby("symbol", sort=False)["_tr"]
+                      .transform(lambda s: s.rolling(n, min_periods=n).sum()))
+
+    high_n = (ordered.groupby("symbol", sort=False)["high"]
+                     .transform(lambda s: s.rolling(n, min_periods=n).max()))
+    low_n  = (ordered.groupby("symbol", sort=False)["low"]
+                     .transform(lambda s: s.rolling(n, min_periods=n).min()))
+    rng = (high_n - low_n).replace(0, np.nan)
+
+    ordered[f"chop{n}"] = 100 * np.log10(tr_sum / rng) / np.log10(n)
+
+    out = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+
+def add_bollinger_bw_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    n: int = 20,
+    k: float = 2.0,
+    *,
+    price_col: str = "close",
+) -> Dict[str, pd.DataFrame]:
+    """
+    Adds bb_bw{n} = (upper-lower)/MA where upper/lower are MA ± k*std.
+    """
+    all_bars = _stack_for_duck(data_by_sym, required=[price_col])
+    view = "_bars_for_bbbw"
+    con.register(view, all_bars)
+    ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+    con.unregister(view)
+    ordered["datetime"] = pd.to_datetime(ordered["datetime"])
+
+    ma = (ordered.groupby("symbol", sort=False)[price_col]
+                 .transform(lambda s: s.rolling(n, min_periods=n).mean()))
+    sd = (ordered.groupby("symbol", sort=False)[price_col]
+                 .transform(lambda s: s.rolling(n, min_periods=n).std(ddof=0)))
+    upper, lower = ma + k*sd, ma - k*sd
+    ordered[f"bb_bw{n}"] = (upper - lower) / ma
+
+    out = {}
+    for sym, g in ordered.groupby("symbol", sort=False):
+        out[sym] = (g.drop(columns=["symbol"])
+                      .set_index("datetime")
+                      .sort_index())
+    return out
+
+def add_atr_feature_pack_duckdb(
+    data_by_sym: Dict[str, pd.DataFrame],
+    con: duckdb.DuckDBPyConnection,
+    *,
+    n_atr: int = 14,
+    kc_basis: str = "ema",
+    kc_n_basis: int = 20,
+    kc_n_atr: int = 20,
+    kc_k: float = 2.0,
+    hhll_window: int = 20,
+    m_atr_stop: float = 3.0,
+    add_regime: bool = True,
+    regime_fixed: Tuple[float,float] = (0.008, 0.02),  # 0.8% / 2.0%
+) -> Dict[str, pd.DataFrame]:
+    """
+    Composes: TR/ATR/NATR, Keltner, HH/LL, ATR trailing stops, CHOP, BB bandwidth,
+    and (optionally) a simple NATR-based regime label.
+    """
+    out = add_atr_duckdb(data_by_sym, con, n=n_atr, add_tr=True, add_natr=True)
+    out = add_keltner_duckdb(out, con, n_basis=kc_n_basis, n_atr=kc_n_atr, k=kc_k, basis=kc_basis)
+    out = add_hhll_duckdb(out, con, window=hhll_window)
+    out = add_atr_trailing_stops_duckdb(out, con, atr_col=f"atr{n_atr}", m_atr=m_atr_stop)
+    out = add_choppiness_duckdb(out, con, n=14)
+    out = add_bollinger_bw_duckdb(out, con, n=20, k=2.0)
+
+    if add_regime:
+        # add 'atr_vol_regime' via fixed thresholds on natr
+        packed = _stack_for_duck(out, required=[f"natr{n_atr}"])
+        view = "_bars_for_regime"
+        con.register(view, packed)
+        ordered = con.execute(f"SELECT * FROM {view} ORDER BY symbol, datetime").df()
+        con.unregister(view)
+        lo, hi = regime_fixed
+        x = ordered[f"natr{n_atr}"]
+        ordered["atr_vol_regime"] = pd.Categorical(
+            np.where(x < lo, "low", np.where(x < hi, "med", "high")),
+            categories=["low","med","high"],
+            ordered=True
+        )
+        # split back
+        res = {}
+        for sym, g in ordered.groupby("symbol", sort=False):
+            # merge regime back into existing dict entry for that sym
+            base = out[sym].copy()
+            base = base.join(g.set_index("datetime")["atr_vol_regime"])
+            res[sym] = base
+        out = res
+
+    return out
+
+# ---------------------------------------------------------------------------
+# ATR helpers
+# ---------------------------------------------------------------------------
+
+class RegimeFilterMixin:
+    # params must be a tuple of (name, default)
+    def regime_allows(self):
+        lo = getattr(self.p, 'natr_min', 0.0)
+        hi = getattr(self.p, 'natr_max', 10.0)
+        try:
+            natr = float(self.data.natr14[0])
+        except Exception:
+            return True
+        return (natr >= lo) and (natr <= hi)
+
+class ATRTrailingStopMixin:
+    _stop_order = None
+
+    def _stop_line_name(self):
+        return getattr(self.p, 'stop_line', 'atr_stop_long_3')
+
+    def update_trailing_stop(self):
+        if not self.position:
+            return
+        stop_line = self._stop_line_name()
+        if not hasattr(self.data, stop_line):
+            return
+        trail = float(getattr(self.data, stop_line)[0])
+        if math.isnan(trail):
+            return
+        if self._stop_order:
+            try:
+                self.cancel(self._stop_order)
+            except Exception:
+                pass
+            self._stop_order = None
+        self._stop_order = self.sell(exectype=bt.Order.Stop, price=trail)
+
+class ATRRiskSizer(bt.Sizer):
+    params = (
+        ('risk_cash', 200.0),
+        ('m_atr', 3.0),
+        ('min_shares', 1),
+        ('max_shares', None),
+        ('fallback_stake', 0),
+    )
+
+    def _getsizing(self, comminfo, cash, data, isbuy):
+        if not isbuy:
+            return self.broker.getposition(data).size
+        try:
+            atr = float(data.atr14[0])
+            px  = float(data.close[0])
+            risk_per_share = max(atr * self.p.m_atr, 1e-6)
+            shares = int(cash // risk_per_share)
+            shares = max(shares, self.p.min_shares)
+            if self.p.max_shares: 
+                shares = min(shares, self.p.max_shares)
+            # ensure affordability
+            if shares * px > cash:
+                shares = int(cash // px)
+            return max(shares, self.p.fallback_stake)
+        except Exception:
+            return self.p.fallback_stake

@@ -66,7 +66,6 @@ class BacktestResult:
     strategy: bt.Strategy
     analyzers: Dict[str, Any]
 
-
 def run_backtest_daily(
     *,
     df: pd.DataFrame,
@@ -76,41 +75,12 @@ def run_backtest_daily(
     commission_bps: float = 0.0,
     datafeed_cls: Type[bt.feeds.PandasData] = bt.feeds.PandasData,
     symbol: str = "SYMBOL",
+    # NEW ↓↓↓
+    sizer_cls: Optional[Type[bt.Sizer]] = None,
+    sizer_params: Optional[Dict[str, Any]] = None,
 ) -> BacktestResult:
-    """Run a Backtrader backtest on **daily** bars and attach common analyzers.
-
-    Parameters
-    ----------
-    df : DataFrame
-        Must contain at least columns: open, high, low, close, volume.
-        Index must be a DatetimeIndex (tz-naive).
-
-    strategy_cls : bt.Strategy
-        Your strategy class (e.g., EMACrossStrategy).
-
-    strategy_params : dict
-        Parameters passed to the strategy constructor.
-
-    start_cash : float
-        Initial broker cash.
-
-    commission_bps : float
-        Commission in basis points (e.g., 0.5 means 0.5 bps = 0.00005).
-
-    datafeed_cls : bt.feeds.PandasData (or subclass)
-        Data feed class to map DataFrame -> Backtrader data (use your PandasDataExt if you
-        have extra lines like ema12/ema26/ma200).
-
-    symbol : str
-        Symbol used for labeling.
-
-    Returns
-    -------
-    BacktestResult
-    """
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("df.index must be a DatetimeIndex")
-    # Ensure tz-naive for Backtrader
     if getattr(df.index, "tz", None) is not None:
         df = df.tz_localize(None)
 
@@ -123,6 +93,10 @@ def run_backtest_daily(
     feed = datafeed_cls(dataname=df)
     cerebro.adddata(feed, name=symbol)
 
+    # Sizer (optional)
+    if sizer_cls is not None:
+        cerebro.addsizer(sizer_cls, **(sizer_params or {}))
+
     # Strategy
     cerebro.addstrategy(strategy_cls, **(strategy_params or {}))
 
@@ -132,8 +106,6 @@ def run_backtest_daily(
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name="dd")
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
     cerebro.addanalyzer(bt.analyzers.AnnualReturn, _name="annual")
-
-    # extract executions
     cerebro.addanalyzer(bt.analyzers.Transactions, _name='tx')
 
     res = cerebro.run()
@@ -144,10 +116,9 @@ def run_backtest_daily(
         "dd": strat.analyzers.dd,
         "trades": strat.analyzers.trades,
         "annual": strat.analyzers.annual,
-        "tx":         strat.analyzers.tx,
+        "tx": strat.analyzers.tx,
     }
     return BacktestResult(symbol=symbol, start_cash=start_cash, cerebro=cerebro, strategy=strat, analyzers=analyzers)
-
 
 # ---------------------------------------------------------------------------
 # Performance metrics
