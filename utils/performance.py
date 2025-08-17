@@ -50,6 +50,8 @@ import matplotlib.pyplot as plt
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 # ---------------------------------------------------------------------------
@@ -562,3 +564,120 @@ def execs_to_lw_markers(exec_df: pd.DataFrame):
             'text': f"{r.side} {getattr(r, 'size', 0):g} @ {getattr(r, 'price', float('nan')):.2f}",
         })
     return markers
+
+
+
+# ---------------------------------------------------------------------------
+# Compare Performance
+# ---------------------------------------------------------------------------
+
+def _to_series(x):
+    s = pd.Series(x)
+    s.index = pd.to_datetime(s.index)
+    return s.sort_index()
+
+def _eq(perf):     return _to_series(perf["equity_strat"]).astype(float)
+def _eq_bh(perf):  return _to_series(perf["equity_bh"]).astype(float)
+def _rets(perf):   return _to_series(perf["daily_returns"]).astype(float)
+def _dd_from_eq(eq): return eq.div(eq.cummax()).sub(1.0)
+
+def _safe_get(d, key, default=np.nan):
+    v = d.get(key, default)
+    try: return float(v)
+    except Exception: return v
+
+# --- main compare API --------------------------------------------------------
+def compare_perfs(perf_by_name: dict, *, symbol="SYMBOL", include_bh=True):
+    """
+    perf_by_name: {"EMA Xover": perf_dict, "MACD Line>Signal": perf_dict, ...}
+    Returns: (fig_equity, fig_hist, fig_dd, metrics_df)
+    """
+    # 1) Equity curves (normalized to 1.0 at first available point for each strategy)
+    eq_norm = {}
+    for name, perf in perf_by_name.items():
+        eq = _eq(perf).dropna()
+        if eq.empty: continue
+        eq_norm[name] = eq / eq.iloc[0]
+    eq_df = pd.DataFrame(eq_norm)  # aligned on union of dates
+
+    # Optional Buy&Hold overlay (taken from the first perf)
+    bh_name = None
+    if include_bh and len(perf_by_name):
+        first_perf = next(iter(perf_by_name.values()))
+        try:
+            bh = _eq_bh(first_perf).dropna()
+            if not bh.empty:
+                eq_df["Buy&Hold"] = bh / bh.iloc[0]
+                bh_name = "Buy&Hold"
+        except KeyError:
+            pass
+
+    fig_eq = go.Figure()
+    for col in eq_df.columns:
+        fig_eq.add_trace(go.Scatter(x=eq_df.index, y=eq_df[col], mode="lines", name=col))
+    fig_eq.update_layout(
+        title=f"{symbol} — Equity Curves (normalized)",
+        yaxis_title="Growth (×)",
+        template="plotly_dark",
+        legend_title="Strategy"
+    )
+
+    # 2) Daily returns histogram (overlay)
+    rets_wide = pd.DataFrame({name: _rets(perf) for name, perf in perf_by_name.items()})
+    long_rets = rets_wide.melt(var_name="Strategy", value_name="Daily Return").dropna()
+    fig_hist = px.histogram(
+        long_rets, x="Daily Return", color="Strategy",
+        barmode="overlay", nbins=80, opacity=0.55,
+        title="Distribution of Daily Returns"
+    )
+    fig_hist.update_layout(template="plotly_dark")
+
+    # 3) Drawdowns overlay (per strategy from its own equity)
+    dd_wide = pd.DataFrame({
+        name: _dd_from_eq(_eq(perf)) for name, perf in perf_by_name.items()
+    })
+    fig_dd = go.Figure()
+    for col in dd_wide.columns:
+        fig_dd.add_trace(go.Scatter(x=dd_wide.index, y=dd_wide[col], mode="lines", name=col))
+    fig_dd.update_layout(
+        title="Drawdown (from peak)",
+        yaxis_title="Drawdown",
+        template="plotly_dark",
+        legend_title="Strategy"
+    )
+
+    # 4) Metrics table (from perf['summary'] for consistency with your single-perf view)
+    rows = []
+    for name, perf in perf_by_name.items():
+        sm = perf.get("summary", {})
+        rows.append({
+            "Strategy": name,
+            "Start": sm.get("Start"),
+            "End": sm.get("End"),
+            "Start Value": _safe_get(sm, "Start Value"),
+            "End Value": _safe_get(sm, "End Value"),
+            "Total Return %": _safe_get(sm, "Total Return %"),
+            "CAGR %": _safe_get(sm, "CAGR %"),
+            "Sharpe": _safe_get(sm, "Sharpe"),
+            "Sortino": _safe_get(sm, "Sortino"),
+            "Sharpe (BT)": _safe_get(sm, "Sharpe (BT)"),
+            "MaxDD %": _safe_get(sm, "MaxDD %"),
+        })
+    metrics_df = (pd.DataFrame(rows)
+                    .set_index("Strategy")
+                    .sort_values("Sharpe", ascending=False))
+
+    return fig_eq, fig_hist, fig_dd, metrics_df
+
+# --- (Optional) nice formatting for display in notebooks ---------------------
+def style_metrics(metrics_df: pd.DataFrame):
+    return metrics_df.style.format({
+        "Start Value": "{:,.0f}",
+        "End Value": "{:,.0f}",
+        "Total Return %": "{:.2f}%",
+        "CAGR %": "{:.2f}%",
+        "Sharpe": "{:.2f}",
+        "Sortino": "{:.2f}",
+        "Sharpe (BT)": "{:.2f}",
+        "MaxDD %": "{:.2f}%"
+    })

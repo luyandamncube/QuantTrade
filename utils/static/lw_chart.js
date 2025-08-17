@@ -8,9 +8,18 @@ function initLightweightChart(config){
     // precomputed series
     ma_series = {},            // { name -> [{time,value}] }
     ema_series = {},           // { name -> [{time,value}] }
-    rsi_series = [],           // [{time,value}]
-    macd: macdCfg = { enabled:false } // { enabled, series:{macd,signal,hist}, colors? }
+    rsi_series = [],           // [{time,value}]  (legacy input)
+    macd: macdCfg = { enabled:false }, // { enabled, series:{macd,signal,hist}, colors? }
+    rsi: rsiCfgRaw = null      // NEW preferred: { enabled, series, bounds, period }
   } = config;
+
+  // Resolve RSI config (supports new "rsi" and legacy separate keys)
+  const rsiCfg = rsiCfgRaw ?? {
+    enabled: Array.isArray(rsi_series) && rsi_series.length > 0,
+    series:  rsi_series || [],
+    bounds:  rsi_bounds,
+    period:  rsi_period
+  };
 
   // ---- theming ----
   const isDark = (theme || 'dark') === 'dark';
@@ -28,27 +37,35 @@ function initLightweightChart(config){
   const macdEl  = document.getElementById('chart-macd');
   const rsiEl   = document.getElementById('chart-rsi');
 
-  if (!priceEl || !volEl || !rsiEl){
-    console.error('Missing containers. Need #chart-price, #chart-vol, #chart-rsi.');
+  if (!priceEl || !volEl){
+    console.error('Missing containers. Need #chart-price and #chart-vol.');
     return;
   }
   if (macdCfg.enabled && !macdEl){
     console.error('MACD enabled but missing container #chart-macd.');
     return;
   }
+  if (rsiCfg.enabled && !rsiEl){
+    console.error('RSI enabled but missing container #chart-rsi.');
+    return;
+  }
 
   const totalH = Math.max(420, (height || 700));
-  const rsiH   = 160;
+  const rsiH   = rsiCfg.enabled ? 160 : 0;
   const volH   = 120;
   const macdH  = macdCfg.enabled ? 140 : 0;
 
+  // Heights + show/hide panes
   priceEl.style.height = `${totalH - volH - rsiH - macdH}px`;
   volEl.style.height   = `${volH}px`;
   if (macdEl){
     macdEl.style.height = macdCfg.enabled ? `${macdH}px` : '0px';
     macdEl.style.display = macdCfg.enabled ? '' : 'none';
   }
-  rsiEl.style.height   = `${rsiH}px`;
+  if (rsiEl){
+    rsiEl.style.height = rsiCfg.enabled ? `${rsiH}px` : '0px';
+    rsiEl.style.display = rsiCfg.enabled ? '' : 'none';
+  }
 
   if (toolbarEl){
     toolbarEl.style.background = isDark ? 'rgba(14,17,23,0.65)' : 'rgba(255,255,255,0.9)';
@@ -157,6 +174,16 @@ function initLightweightChart(config){
     return ans;
   }
 
+  // NEW: remove price lines via series API
+  function clearPriceLines(dict, seriesMap){
+    for (const [name, pl] of Object.entries(dict)){
+      const seriesLine = seriesMap[name];
+      if (seriesLine && pl){
+        try { seriesLine.removePriceLine(pl); } catch (e) {}
+      }
+    }
+  }
+
   // ---- build charts ----
   const chartPrice = LightweightCharts.createChart(priceEl, {
     layout:{ background:{type:'solid',color:bg}, textColor:text },
@@ -170,12 +197,14 @@ function initLightweightChart(config){
     timeScale:{ timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:6 },
     rightPriceScale:{ borderVisible:false }
   });
-  const chartRSI = LightweightCharts.createChart(rsiEl, {
-    layout:{ background:{type:'solid',color:bg}, textColor:text },
-    grid:{ vertLines:{color:grid}, horzLines:{color:grid} },
-    timeScale:{ timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:6 },
-    rightPriceScale:{ borderVisible:false }
-  });
+  const chartRSI = (rsiCfg.enabled && rsiEl)
+    ? LightweightCharts.createChart(rsiEl, {
+        layout:{ background:{type:'solid',color:bg}, textColor:text },
+        grid:{ vertLines:{color:grid}, horzLines:{color:grid} },
+        timeScale:{ timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:6 },
+        rightPriceScale:{ borderVisible:false }
+      })
+    : null;
   const chartMACD = (macdCfg.enabled && macdEl)
     ? LightweightCharts.createChart(macdEl, {
         layout:{ background:{type:'solid',color:bg}, textColor:text },
@@ -212,12 +241,14 @@ function initLightweightChart(config){
 
   // RSI (precomputed)
   let rsiSeriesLine=null, currentRSI=[];
-  if (Array.isArray(rsi_series) && rsi_series.length){
+  const rsiBounds = rsiCfg.bounds;
+  const rsiPeriodLabel = rsiCfg.period;
+  if (chartRSI && Array.isArray(rsiCfg.series) && rsiCfg.series.length){
     rsiSeriesLine = chartRSI.addLineSeries({ lineWidth:2, color:'#ffd54f', priceLineVisible:false });
-    if (Array.isArray(rsi_bounds) && rsi_bounds.length===2
-        && Number.isFinite(+rsi_bounds[0]) && Number.isFinite(+rsi_bounds[1])){
-      rsiSeriesLine.createPriceLine({ price:+rsi_bounds[1], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsi_bounds[1]) });
-      rsiSeriesLine.createPriceLine({ price:+rsi_bounds[0], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsi_bounds[0]) });
+    if (Array.isArray(rsiBounds) && rsiBounds.length===2
+        && Number.isFinite(+rsiBounds[0]) && Number.isFinite(+rsiBounds[1])){
+      rsiSeriesLine.createPriceLine({ price:+rsiBounds[1], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsiBounds[1]) });
+      rsiSeriesLine.createPriceLine({ price:+rsiBounds[0], color:'#9ca3af', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, title:String(rsiBounds[0]) });
     }
   }
 
@@ -293,7 +324,7 @@ function initLightweightChart(config){
     }
     if (rsiSeriesLine && currentRSI.length){
       const r = valueAtTime(currentRSI, c.time);
-      const label = rsi_period ? `RSI(${rsi_period})` : 'RSI';
+      const label = rsiPeriodLabel ? `RSI(${rsiPeriodLabel})` : 'RSI';
       html += `<span class="row">${label}: ${fmt(r ? r.value : null)}</span>`;
     }
     if (chartMACD){
@@ -339,10 +370,13 @@ function initLightweightChart(config){
     volumeSeries.setData(currentVolumes);
     candleSeries.setMarkers(aggregateMarkers(markers, tf));
 
-    if (lastPriceLine) { lastPriceLine.remove(); lastPriceLine=null; }
-    for (const [,pl] of Object.entries(maPriceLines)) pl.remove();
-    for (const [,pl] of Object.entries(emaPriceLines)) pl.remove();
-    maPriceLines={}; emaPriceLines={};
+    // remove price lines via the series API
+    if (lastPriceLine) {
+      try { candleSeries.removePriceLine(lastPriceLine); } catch (e) {}
+      lastPriceLine = null;
+    }
+    clearPriceLines(maPriceLines,  maSeriesLines);  maPriceLines  = {};
+    clearPriceLines(emaPriceLines, emaSeriesLines); emaPriceLines = {};
 
     // Paint precomputed MA/EMA series
     currentMAs = {};
@@ -359,8 +393,8 @@ function initLightweightChart(config){
     }
 
     // RSI
-    if (rsiSeriesLine){
-      currentRSI = aggregateLineSeries(rsi_series || [], tf);
+    if (chartRSI && rsiSeriesLine){
+      currentRSI = aggregateLineSeries(rsiCfg.series || [], tf);
       rsiSeriesLine.setData(currentRSI);
     }
 
@@ -404,50 +438,48 @@ function initLightweightChart(config){
     }
     setWatermarkText(tf);
 
-    chartPrice.timeScale().fitContent();
-    const rangeNow = chartPrice.timeScale().getVisibleRange();
-    if (rangeNow){
-      chartVol.timeScale().setVisibleRange(rangeNow);
-      chartRSI.timeScale().setVisibleRange(rangeNow);
-      if (chartMACD) chartMACD.timeScale().setVisibleRange(rangeNow);
-    } else {
-      requestAnimationFrame(() => {
-        const r = chartPrice.timeScale().getVisibleRange();
-        if (r){
-          chartVol.timeScale().setVisibleRange(r);
-          chartRSI.timeScale().setVisibleRange(r);
-          if (chartMACD) chartMACD.timeScale().setVisibleRange(r);
-        }
-      });
+    // INITIAL ALIGNMENT: sync panes by logical range
+    const lr = chartPrice.timeScale().getVisibleLogicalRange();
+    if (lr){
+      chartVol.timeScale().setVisibleLogicalRange(lr);
+      if (chartRSI)  chartRSI.timeScale().setVisibleLogicalRange(lr);
+      if (chartMACD) chartMACD.timeScale().setVisibleLogicalRange(lr);
     }
+    // refresh labels using the last visible time (not dataset end)
+    const tr = chartPrice.timeScale().getVisibleRange();
+    const tvis = tr?.to ?? currentCandles.at(-1)?.time;
+    if (tvis != null) updateIndicatorPriceLines(tvis);
 
     if (currentCandles.length){
       updateLegend(currentCandles[currentCandles.length-1].time);
     }
   }
 
-  // sync ranges across panes + keep labels updated
+  // sync panes by LOGICAL range (prevents drift) + keep labels updated
   let syncing = false;
-  function onRangeSyncFrom(from, others){
+  function syncLogical(from, others){
     if (syncing) return;
-    const r = from.timeScale().getVisibleRange();
-    if (!r) return;
+    const lr = from.timeScale().getVisibleLogicalRange();
+    if (!lr) return;
     syncing = true;
-    for (const ch of others) ch.timeScale().setVisibleRange(r);
+    for (const ch of others) ch.timeScale().setVisibleLogicalRange(lr);
     syncing = false;
-    // after syncing, use the last visible candle time to refresh labels
-    const t = currentCandles.at(-1)?.time;
+
+    const tr = from.timeScale().getVisibleRange();
+    const t = tr?.to ?? currentCandles.at(-1)?.time;
     if (t != null) updateIndicatorPriceLines(t);
   }
 
   function wireSync(){
-    const group = [chartPrice, chartVol, chartRSI].concat(chartMACD ? [chartMACD] : []);
+    const group = [chartPrice, chartVol]
+      .concat(chartRSI ? [chartRSI] : [])
+      .concat(chartMACD ? [chartMACD] : []);
     for (const a of group){
       const others = group.filter(x => x!==a);
-      a.timeScale().subscribeVisibleTimeRangeChange(() => onRangeSyncFrom(a, others));
+      a.timeScale().subscribeVisibleLogicalRangeChange(() => syncLogical(a, others));
     }
     chartPrice.subscribeCrosshairMove((param) => {
-      const t = param?.time ?? (currentCandles.at(-1)?.time);
+      const t = param?.time ?? (chartPrice.timeScale().getVisibleRange()?.to ?? currentCandles.at(-1)?.time);
       if (t != null) {
         updateLegend(t);
         updateIndicatorPriceLines(t);
@@ -467,7 +499,7 @@ function initLightweightChart(config){
     const w = Math.max(320, Math.floor(e[0].contentRect.width));
     chartPrice.applyOptions({ width: w });
     chartVol.applyOptions({ width: w });
-    chartRSI.applyOptions({ width: w });
+    if (chartRSI)  chartRSI.applyOptions({ width: w });
     if (chartMACD) chartMACD.applyOptions({ width: w });
   });
   ro.observe(document.getElementById('wrap'));
