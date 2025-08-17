@@ -650,6 +650,7 @@ def compare_perfs(perf_by_name: dict, *, symbol="SYMBOL", include_bh=True):
     rows = []
     for name, perf in perf_by_name.items():
         sm = perf.get("summary", {})
+        ts = perf.get("trade_stats", {})
         rows.append({
             "Strategy": name,
             "Start": sm.get("Start"),
@@ -662,6 +663,8 @@ def compare_perfs(perf_by_name: dict, *, symbol="SYMBOL", include_bh=True):
             "Sortino": _safe_get(sm, "Sortino"),
             "Sharpe (BT)": _safe_get(sm, "Sharpe (BT)"),
             "MaxDD %": _safe_get(sm, "MaxDD %"),
+            "Win rate %": _safe_get(ts, "Win rate %"),
+            
         })
     metrics_df = (pd.DataFrame(rows)
                     .set_index("Strategy")
