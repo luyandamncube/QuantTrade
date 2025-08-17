@@ -586,6 +586,20 @@ def _safe_get(d, key, default=np.nan):
     try: return float(v)
     except Exception: return v
 
+def _safe_nested(d, keys, default=np.nan):
+    cur = d
+    for k in keys:
+        try:
+            cur = cur.get(k) if hasattr(cur, "get") else cur[k]
+        except Exception:
+            return default
+        if cur is None:
+            return default
+    try:
+        return float(cur)
+    except Exception:
+        return cur
+    
 # --- main compare API --------------------------------------------------------
 def compare_perfs(perf_by_name: dict, *, symbol="SYMBOL", include_bh=True):
     """
@@ -664,7 +678,15 @@ def compare_perfs(perf_by_name: dict, *, symbol="SYMBOL", include_bh=True):
             "Sharpe (BT)": _safe_get(sm, "Sharpe (BT)"),
             "MaxDD %": _safe_get(sm, "MaxDD %"),
             "Win rate %": _safe_get(ts, "Win rate %"),
-            
+            "Trades": _safe_get(ts, "Total trades"),
+            "Wins": _safe_get(ts, "Won"),
+            "Losses": _safe_get(ts, "Lost"),
+            "Gross PnL": _safe_nested(ts, ["Gross PnL", "total"]),
+            "Net PnL": _safe_nested(ts, ["Net PnL", "total"]),
+            "Avg Trade (Net)": _safe_nested(ts, ["Net PnL", "average"]),
+            "Longest win streak": _safe_get(ts, "Longest win streak"),
+            "Longest loss streak": _safe_get(ts, "Longest loss streak"),
+
         })
     metrics_df = (pd.DataFrame(rows)
                     .set_index("Strategy")
